@@ -1,5 +1,5 @@
 name: Actualizar adjudicaciones
-run-name: Actualizar adjudicaciones (${{ github.event_name }})
+run-name: Actualizar adjudicaciones (${{ inputs.continue_chain && 'automatico' || github.event_name }})
 
 on:
   push:
@@ -24,12 +24,18 @@ on:
         required: false
         type: string
         default: ""
+      continue_chain:
+        description: "Uso interno: mantener la comprobacion automatica"
+        required: false
+        type: boolean
+        default: false
   schedule:
     # Un unico temporizador simple. La primera tarea aplica el calendario de Espana.
     - cron: "*/5 * * * *"
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: actualizar-adjudicaciones
@@ -46,6 +52,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
+          echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
           if [ "$EVENT_NAME" != "schedule" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -107,3 +114,25 @@ jobs:
             git commit -m "Actualizar adjudicaciones"
             git push
           fi
+
+      - name: Programar siguiente comprobacion
+        if: >-
+          always() &&
+          steps.calendar.outputs.run == 'true' &&
+          (github.event_name == 'push' || inputs.continue_chain == true)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STARTED_AT: ${{ steps.calendar.outputs.started }}
+        run: |
+          now=$(date +%s)
+          delay=$((STARTED_AT + 300 - now))
+          if (( delay > 0 )); then
+            sleep "$delay"
+          fi
+          printf '{"ref":"%s","inputs":{"force":"auto","continue_chain":true}}\n' "$GITHUB_REF_NAME" |
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/update-adjudicaciones.yml/dispatches" \
+              --input -
