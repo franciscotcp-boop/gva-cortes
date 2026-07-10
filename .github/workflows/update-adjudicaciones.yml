@@ -1,6 +1,12 @@
 name: Actualizar adjudicaciones
+run-name: Actualizar adjudicaciones (${{ github.event_name }})
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/update-adjudicaciones.yml"
   workflow_dispatch:
     inputs:
       force:
@@ -19,15 +25,19 @@ on:
         type: string
         default: ""
   schedule:
-    # GitHub usa UTC. El script decide el calendario real con zona Europe/Madrid.
     # Julio y agosto: busca adjudicaciones de inicio de curso cada 5 minutos.
-    # Se desplaza a :02, :07, :12... para evitar los minutos mas saturados de GitHub Actions.
-    - cron: "2-59/5 * * 7,8 *"
-    # Septiembre-junio: cubre martes y jueves en horario peninsular, con margen UTC.
-    - cron: "2-59/5 * * 1-6,9-12 1,2,3,4,5"
+    - cron: "*/5 * * 7,8 *"
+      timezone: "Europe/Madrid"
+    # Septiembre-junio: busca adjudicaciones durante el curso los martes y jueves.
+    - cron: "*/5 * * 1-6,9-12 2,4"
+      timezone: "Europe/Madrid"
 
 permissions:
   contents: write
+
+concurrency:
+  group: actualizar-adjudicaciones
+  cancel-in-progress: false
 
 jobs:
   update-json:
