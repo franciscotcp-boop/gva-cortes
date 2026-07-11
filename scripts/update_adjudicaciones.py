@@ -60,6 +60,23 @@ CUT_FORMAT = [
     "origen",
 ]
 
+# Solo estas especialidades pertenecen al cuerpo de Maestros. Los PDF pueden
+# repetir una misma plaza en listas de cuerpos distintos; el corte valido es el
+# de la lista correspondiente al cuerpo titular de la especialidad.
+MAESTRO_SPECIALTY_CODES = frozenset({
+    "120",
+    "121",
+    "122",
+    "123",
+    "124",
+    "126",
+    "127",
+    "128",
+    "151",
+    "152",
+    "153",
+})
+
 DEFAULT_DATA = {
     "schema_version": 1,
     "generated_at": None,
@@ -151,6 +168,10 @@ def norm(value: str) -> str:
 
 def clean(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").replace("\xa0", " ")).strip()
+
+
+def owning_body_for_specialty(code: str) -> str:
+    return "maestros" if str(code) in MAESTRO_SPECIALTY_CODES else "secundaria"
 
 
 def smart_title(value: str) -> str:
@@ -384,7 +405,7 @@ def load_centers(existing: list[list]) -> tuple[list[list], dict[str, dict[str, 
     return centers, by_code
 
 
-CANDIDATE_RE = re.compile(r"^(\d{1,5})\s+[^,]+,\s+.+")
+CANDIDATE_RE = re.compile(r"^(\d{1,5})(?:\s*/\s*\d{1,5})?\s+(?!\s*/)[^,]+,\s+.+")
 CENTER_RE = re.compile(r"^\d{5,7}\s+(.+)\((\d{8})\)(.+)$")
 SPECIALTY_RE = re.compile(r"^([0-9A-Z]{3})\s*/\s*(.+)$")
 
@@ -420,7 +441,7 @@ def detect_placement_type(block: list[str]) -> str:
 def parse_block(block: list[str], body: str) -> Adjudication | None:
     if not block or not any("Adjudicat" in line for line in block):
         return None
-    match_cut = re.match(r"^(\d{1,5})\s+", block[0])
+    match_cut = re.match(r"^(\d{1,5})(?:\s*/\s*\d{1,5})?\s+", block[0])
     if not match_cut:
         return None
     center_match = None
@@ -475,6 +496,8 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
 
     best: OrderedDict[tuple[str, str], Adjudication] = OrderedDict()
     for row in rows:
+        if owning_body_for_specialty(row.specialty_code) != body:
+            continue
         key = (row.center_code, row.specialty_code)
         old = best.get(key)
         if old is None or row.cut > old.cut:
