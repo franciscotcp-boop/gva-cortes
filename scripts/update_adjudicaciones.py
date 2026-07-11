@@ -60,6 +60,14 @@ CUT_FORMAT = [
     "origen",
 ]
 
+SCHEMA_VERSION = 3
+CUT_POLICY = {
+    "rule": "En Otros Cuerpos se usa la copia canonica donde coinciden la especialidad del encabezado y la especialidad de la plaza.",
+    "maestros": "Se conserva la especialidad de la plaza adjudicada.",
+    "secundaria_y_otros": "Se descartan las copias repetidas de una plaza publicadas bajo otras bolsas compatibles.",
+    "independent_extractors": ["pdfplumber", "pypdf"],
+}
+
 # Solo estas especialidades pertenecen al cuerpo de Maestros. Los PDF pueden
 # repetir una misma plaza en listas de cuerpos distintos; el corte valido es el
 # de la lista correspondiente al cuerpo titular de la especialidad.
@@ -78,7 +86,7 @@ MAESTRO_SPECIALTY_CODES = frozenset({
 })
 
 DEFAULT_DATA = {
-    "schema_version": 1,
+    "schema_version": SCHEMA_VERSION,
     "generated_at": None,
     "timezone": "Europe/Madrid",
     "sources": {
@@ -88,6 +96,7 @@ DEFAULT_DATA = {
     },
     "center_format": CENTER_FORMAT,
     "cut_format": CUT_FORMAT,
+    "cut_policy": CUT_POLICY,
     "centers": [],
     "cuts": {
         "inicio": {
@@ -408,6 +417,8 @@ def load_centers(existing: list[list]) -> tuple[list[list], dict[str, dict[str, 
 CANDIDATE_RE = re.compile(r"^(\d{1,5})(?:\s*/\s*\d{1,5})?\s+(?!\s*/)[^,]+,\s+.+")
 CENTER_RE = re.compile(r"^\d{5,7}\s+(.+)\((\d{8})\)(.+)$")
 SPECIALTY_RE = re.compile(r"^([0-9A-Z]{3})\s*/\s*(.+)$")
+PAGE_SPECIALTY_PREFIX_RE = re.compile(r"^([0-9A-Z]{3})\s+(.+)$")
+PAGE_SPECIALTY_SUFFIX_RE = re.compile(r"^(.+?)\s+([0-9A-Z]{3})$")
 
 
 def parse_date_from_text(text: str) -> str | None:
@@ -427,6 +438,33 @@ def classify_body(text: str) -> str | None:
     return None
 
 
+def secondary_page_specialty(text: str) -> tuple[str, str] | None:
+    """Read the offered specialty from an Otros Cuerpos page header."""
+    lines = [clean(line) for line in text.splitlines() if clean(line)]
+    marker = next(
+        (index for index, line in enumerate(lines) if "altres cossos / otros cuerpos" in norm(line)),
+        None,
+    )
+    if marker is None:
+        return None
+
+    # The visual "219 TECNOLOGIA" header is extracted in reverse order by
+    # some PDF engines, so both representations are accepted.
+    for line in lines[marker + 1 : marker + 7]:
+        if "/" in line:
+            continue
+        suffix = PAGE_SPECIALTY_SUFFIX_RE.match(line)
+        if suffix and any(character.isdigit() for character in suffix.group(2)):
+            return suffix.group(2), clean(suffix.group(1))
+        prefix = PAGE_SPECIALTY_PREFIX_RE.match(line)
+        if (
+            prefix
+            and any(character.isdigit() for character in prefix.group(1))
+        ):
+            return prefix.group(1), clean(prefix.group(2))
+    return None
+
+
 def detect_placement_type(block: list[str]) -> str:
     normalized = norm(" ".join(block))
     if "substitucio indeterminada" in normalized or "sustitucion indeterminada" in normalized:
@@ -438,7 +476,11 @@ def detect_placement_type(block: list[str]) -> str:
     return ""
 
 
-def parse_block(block: list[str], body: str) -> Adjudication | None:
+def parse_block(
+    block: list[str],
+    body: str,
+    page_specialty: tuple[str, str] | None = None,
+) -> Adjudication | None:
     if not block or not any("Adjudicat" in line for line in block):
         return None
     match_cut = re.match(r"^(\d{1,5})(?:\s*/\s*\d{1,5})?\s+", block[0])
@@ -449,13 +491,27 @@ def parse_block(block: list[str], body: str) -> Adjudication | None:
     for line in block[1:]:
         center_match = center_match or CENTER_RE.match(line)
         specialty_match = specialty_match or SPECIALTY_RE.match(line)
-    if not center_match or not specialty_match:
+    if not center_match:
+        return None
+    if body == "secundaria":
+        if page_specialty is None or specialty_match is None:
+            return None
+        # Otros Cuerpos repeats the same awarded position in every compatible
+        # candidate pool. Only the copy whose page header matches the awarded
+        # position specialty has a meaningful cut for that specialty.
+        if specialty_match.group(1) != page_specialty[0]:
+            return None
+        specialty_code, specialty_name = page_specialty
+    elif specialty_match:
+        specialty_code = specialty_match.group(1)
+        specialty_name = clean(specialty_match.group(2))
+    else:
         return None
     return Adjudication(
         cut=int(match_cut.group(1)),
         center_code=center_match.group(2),
-        specialty_code=specialty_match.group(1),
-        specialty_name=clean(specialty_match.group(2)),
+        specialty_code=specialty_code,
+        specialty_name=specialty_name,
         center_name=clean(center_match.group(3)),
         locality=clean(center_match.group(1)),
         body=body,
@@ -476,23 +532,27 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
         if body is None:
             return None
 
-        current: list[str] = []
-        for page in pdf.pages:
+        for page_number, page in enumerate(pdf.pages, start=1):
             text = page.extract_text(x_tolerance=1, y_tolerance=3) or ""
+            page_specialty = secondary_page_specialty(text) if body == "secundaria" else None
+            if body == "secundaria" and page_specialty is None:
+                raise ValueError(f"No se pudo leer la especialidad del encabezado en la pagina {page_number}")
+
+            current: list[str] = []
             for raw_line in text.splitlines():
                 line = clean(raw_line)
                 if not line:
                     continue
                 if CANDIDATE_RE.match(line):
-                    parsed = parse_block(current, body)
+                    parsed = parse_block(current, body, page_specialty)
                     if parsed:
                         rows.append(parsed)
                     current = [line]
                 elif current:
                     current.append(line)
-        parsed = parse_block(current, body)
-        if parsed:
-            rows.append(parsed)
+            parsed = parse_block(current, body, page_specialty)
+            if parsed:
+                rows.append(parsed)
 
     best: OrderedDict[tuple[str, str], Adjudication] = OrderedDict()
     for row in rows:
@@ -573,6 +633,119 @@ def row_origin(row: list, default: str) -> str:
     if len(row) >= 8 and row[7] in {"inicio", "curso"}:
         return row[7]
     return default
+
+
+def latest_secondary_course_url(data: dict) -> str | None:
+    items = [
+        item
+        for item in data.get("cuts", {}).get("curso", {}).get("pdfs", [])
+        if item.get("body") == "secundaria" and item.get("url")
+    ]
+    if not items:
+        return None
+    return max(items, key=lambda item: (item.get("published_date") or "", item.get("url") or ""))["url"]
+
+
+def secondary_start_url(data: dict) -> str | None:
+    item = data.get("cuts", {}).get("inicio", {}).get("pdfs", {}).get("secundaria", {})
+    return item.get("url")
+
+
+def update_secondary_metadata(data: dict, parsed: ParsedPdf, mode: str) -> None:
+    if mode == "inicio":
+        data["cuts"]["inicio"].setdefault("pdfs", {})["secundaria"] = {
+            "url": parsed.url,
+            "sha256": parsed.sha256,
+            "published_date": parsed.published_date,
+            "rows": len(parsed.rows),
+        }
+    else:
+        history = data["cuts"]["curso"].setdefault("pdfs", [])
+        current = next((item for item in history if item.get("body") == "secundaria"), None)
+        replacement = {
+            "url": parsed.url,
+            "sha256": parsed.sha256,
+            "body": "secundaria",
+            "published_date": parsed.published_date,
+            "rows": len(parsed.rows),
+        }
+        if current is None:
+            history.append(replacement)
+        else:
+            current.update(replacement)
+
+    data.setdefault("processed_pdfs", {})[parsed.url] = {
+        "sha256": parsed.sha256,
+        "mode": mode,
+        "body": "secundaria",
+        "published_date": parsed.published_date,
+        "rows": len(parsed.rows),
+        "parser_policy": "header_y_plaza_coincidentes",
+        "processed_at": now_local().isoformat(timespec="seconds"),
+    }
+
+
+def migrate_secondary_header_policy(data: dict, centers_by_code: dict[str, dict[str, str]]) -> bool:
+    if int(data.get("schema_version") or 0) >= SCHEMA_VERSION:
+        return False
+
+    inicio = data.get("cuts", {}).get("inicio", {})
+    if not inicio.get("rows"):
+        data["schema_version"] = SCHEMA_VERSION
+        data["cut_policy"] = CUT_POLICY
+        return True
+
+    start_url = secondary_start_url(data)
+    if not start_url:
+        raise RuntimeError("No se puede migrar secundaria: falta el PDF de inicio")
+    parsed_start = parse_pdf(start_url, http_get(start_url), centers_by_code)
+    if parsed_start is None or parsed_start.body != "secundaria" or not parsed_start.rows:
+        raise RuntimeError("No se puede migrar secundaria: PDF de inicio no valido")
+
+    maestro_start = [
+        row_with_origin(row, "inicio")
+        for row in inicio.get("rows", [])
+        if len(row) >= 7 and row[6] == "maestros"
+    ]
+    secondary_start = [row_with_origin(row, "inicio") for row in parsed_start.rows]
+    new_start = sorted(
+        maestro_start + secondary_start,
+        key=lambda row: (str(row[1]), int(row[2]), str(row[0])),
+    )
+    inicio["rows"] = new_start
+    update_secondary_metadata(data, parsed_start, "inicio")
+
+    curso = data.get("cuts", {}).get("curso", {})
+    maestro_course = [
+        row_with_origin(row, "curso")
+        for row in curso.get("rows", [])
+        if len(row) >= 7 and row[6] == "maestros" and row_origin(row, "inicio") == "curso"
+    ]
+    secondary_course: list[list] = []
+    course_url = latest_secondary_course_url(data)
+    if course_url:
+        parsed_course = parse_pdf(course_url, http_get(course_url), centers_by_code)
+        if parsed_course is None or parsed_course.body != "secundaria":
+            raise RuntimeError("No se puede migrar secundaria: PDF de durante el curso no valido")
+        secondary_course = [row_with_origin(row, "curso") for row in parsed_course.rows]
+        update_secondary_metadata(data, parsed_course, "curso")
+
+    cumulative = {row_key(row): row_with_origin(row, "inicio") for row in new_start}
+    for row in maestro_course + secondary_course:
+        cumulative[row_key(row)] = row
+    curso["rows"] = sorted(
+        cumulative.values(),
+        key=lambda row: (str(row[1]), int(row[2]), str(row[0])),
+    )
+
+    data["schema_version"] = SCHEMA_VERSION
+    data["cut_policy"] = CUT_POLICY
+    print(
+        "Migracion por encabezados completada: "
+        f"inicio_secundaria={len(parsed_start.rows)} "
+        f"curso_secundaria={len(secondary_course)}"
+    )
+    return True
 
 
 def apply_inicio(data: dict, parsed_items: list[ParsedPdf]) -> bool:
@@ -730,7 +903,7 @@ def main() -> int:
     data = load_data()
     data["centers"], centers_by_code = load_centers(data.get("centers", []))
     target_school_year = None if args.include_old else (args.school_year or school_year_for_date(None, dt))
-    changed = False
+    changed = migrate_secondary_header_policy(data, centers_by_code)
     for mode in modes:
         changed = run_mode(data, mode, centers_by_code, target_school_year) or changed
 
