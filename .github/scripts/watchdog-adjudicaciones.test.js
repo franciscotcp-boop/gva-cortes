@@ -7,6 +7,7 @@ const runWatchdog = require("./watchdog-adjudicaciones.js");
 const {
   buildIncidentReport,
   generatedAtHealth,
+  monitorEventName,
   shouldMonitor,
   staleRunReason,
 } = runWatchdog._test;
@@ -141,11 +142,10 @@ test("las comprobaciones manuales siempre estan permitidas", () => {
   assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), "workflow_dispatch"), true);
 });
 
-test("el respaldo workflow_run comprueba una de cada dos finalizaciones", () => {
-  const july = new Date("2026-07-14T12:00:00Z");
-  assert.equal(shouldMonitor(july, "workflow_run", 772), true);
-  assert.equal(shouldMonitor(july, "workflow_run", 773), false);
-  assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), "workflow_run", 774), false);
+test("la cadena automatica respeta el mismo calendario que el cron", () => {
+  assert.equal(monitorEventName("workflow_dispatch", true), "schedule");
+  assert.equal(monitorEventName("workflow_dispatch", false), "workflow_dispatch");
+  assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), monitorEventName("workflow_dispatch", true)), false);
 });
 
 test("solo considera bloqueada una cola de mas de treinta minutos", () => {
