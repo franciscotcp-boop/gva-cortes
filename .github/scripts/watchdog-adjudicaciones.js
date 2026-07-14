@@ -29,11 +29,16 @@ function madridCalendar(now = new Date()) {
   return { month: Number(values.month), weekday: values.weekday };
 }
 
-function shouldMonitor(now = new Date(), eventName = "schedule") {
-  if (eventName !== "schedule") return true;
+function shouldMonitor(now = new Date(), eventName = "schedule", workflowRunNumber = null) {
+  if (eventName !== "schedule" && eventName !== "workflow_run") return true;
   const { month, weekday } = madridCalendar(now);
-  if (month === 7 || month === 8) return true;
-  return weekday === "Tue" || weekday === "Thu";
+  const activeDay = month === 7 || month === 8 || weekday === "Tue" || weekday === "Thu";
+  if (!activeDay) return false;
+  if (eventName === "workflow_run") {
+    const runNumber = Number(workflowRunNumber);
+    return Number.isInteger(runNumber) && runNumber > 0 && runNumber % 2 === 0;
+  }
+  return true;
 }
 
 function runAgeMinutes(run, now = new Date()) {
@@ -306,8 +311,11 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     return { action: "test_alert", issueUrl };
   }
 
-  if (!shouldMonitor(now, context.eventName)) {
-    core.notice("Fuera del calendario de vigilancia. No se realiza ninguna accion.");
+  const workflowRunNumber = context.payload.workflow_run
+    ? context.payload.workflow_run.run_number
+    : null;
+  if (!shouldMonitor(now, context.eventName, workflowRunNumber)) {
+    core.notice("Fuera del calendario o del turno de vigilancia. No se realiza ninguna accion.");
     return { action: "outside_calendar" };
   }
 
