@@ -1,17 +1,10 @@
 name: Vigilar adjudicaciones
-run-name: Vigilar adjudicaciones (${{ github.event_name }})
+run-name: Vigilar adjudicaciones (${{ inputs.continue_chain && 'automatico' || github.event_name }})
 
 on:
   schedule:
     # Cada 15 minutos, desplazado respecto al workflow principal de cinco minutos.
     - cron: "7,22,37,52 * * * *"
-  # Respaldo frente a retrasos del planificador: la logica solo actua en una de
-  # cada dos finalizaciones del workflow principal, aproximadamente cada 10 min.
-  workflow_run:
-    workflows:
-      - Actualizar adjudicaciones
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       dry_run:
@@ -21,6 +14,11 @@ on:
         default: true
       test_alert:
         description: "Enviar una alerta de prueba sin intervenir"
+        required: false
+        type: boolean
+        default: false
+      continue_chain:
+        description: "Uso interno: mantener la vigilancia automatica"
         required: false
         type: boolean
         default: false
@@ -42,6 +40,10 @@ jobs:
     timeout-minutes: 12
 
     steps:
+      - name: Registrar hora de inicio
+        id: clock
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Descargar solamente el codigo del vigilante
         uses: actions/checkout@v7
 
@@ -55,6 +57,7 @@ jobs:
           RECOVERY_WAIT_MINUTES: "8"
           DRY_RUN: ${{ inputs.dry_run || false }}
           TEST_ALERT: ${{ inputs.test_alert || false }}
+          CHAIN_RUN: ${{ inputs.continue_chain || false }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           retries: 2
@@ -62,3 +65,25 @@ jobs:
           script: |
             const runWatchdog = require("./.github/scripts/watchdog-adjudicaciones.js");
             await runWatchdog({ github, context, core });
+
+      - name: Programar siguiente vigilancia
+        if: >-
+          always() &&
+          steps.watchdog.outputs.monitor_active != 'false' &&
+          (github.event_name == 'schedule' || inputs.continue_chain == true)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STARTED_AT: ${{ steps.clock.outputs.started }}
+        run: |
+          now=$(date +%s)
+          delay=$((STARTED_AT + 600 - now))
+          if (( delay > 0 )); then
+            sleep "$delay"
+          fi
+          printf '{"ref":"%s","inputs":{"dry_run":false,"test_alert":false,"continue_chain":true}}\n' "$GITHUB_REF_NAME" |
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/watchdog-adjudicaciones.yml/dispatches" \
+              --input -
