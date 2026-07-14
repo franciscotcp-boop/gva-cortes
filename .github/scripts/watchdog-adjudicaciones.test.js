@@ -208,3 +208,44 @@ test("simula una recuperacion fallida y deja una alerta abierta", async () => {
   assert.equal(calls.issueUpdates.length, 0);
   assert.equal(core.records.outputs.recovery_succeeded, "false");
 });
+
+test("confirma por correo una recuperacion que termino despues del primer aviso", async () => {
+  setWatchdogEnv();
+  const now = new Date();
+  const calls = { comments: [], issueUpdates: [] };
+  const github = {
+    rest: {
+      repos: {
+        getContent: async () => ({
+          data: { content: encodedJson(now.toISOString()), sha: "blob-sha" },
+        }),
+      },
+      git: {
+        getBlob: async () => { throw new Error("No deberia usarse getBlob en esta prueba"); },
+      },
+      actions: {
+        listWorkflowRuns: async () => ({ data: { workflow_runs: [] } }),
+      },
+      issues: {
+        listForRepo: async () => ({
+          data: [{
+            number: 18,
+            title: "[AdjudicApp] Recuperacion automatica fallida",
+            html_url: "https://github.com/example/issues/18",
+          }],
+        }),
+        createComment: async args => { calls.comments.push(args); return { data: {} }; },
+        update: async args => { calls.issueUpdates.push(args); return { data: {} }; },
+      },
+    },
+  };
+  const core = fakeCore();
+  const result = await runWatchdog({ github, context: context(), core, now, sleepFn: async () => {} });
+
+  assert.equal(result.action, "recovered_after_alert");
+  assert.equal(calls.comments.length, 1);
+  assert.match(calls.comments[0].body, /RECUPERACION CONFIRMADA/);
+  assert.equal(calls.issueUpdates.length, 1);
+  assert.equal(calls.issueUpdates[0].state, "closed");
+  assert.equal(core.records.outputs.recovery_succeeded, "true");
+});
