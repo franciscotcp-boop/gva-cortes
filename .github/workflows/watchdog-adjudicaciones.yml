@@ -5,6 +5,13 @@ on:
   schedule:
     # Cada 15 minutos, desplazado respecto al workflow principal de cinco minutos.
     - cron: "7,22,37,52 * * * *"
+  # Respaldo frente a retrasos del planificador: la logica solo actua en una de
+  # cada dos finalizaciones del workflow principal, aproximadamente cada 10 min.
+  workflow_run:
+    workflows:
+      - Actualizar adjudicaciones
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       dry_run:
