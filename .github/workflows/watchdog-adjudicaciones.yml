@@ -1,0 +1,57 @@
+name: Vigilar adjudicaciones
+run-name: Vigilar adjudicaciones (${{ github.event_name }})
+
+on:
+  schedule:
+    # Cada 15 minutos, desplazado respecto al workflow principal de cinco minutos.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Comprobar sin cancelar ni relanzar nada"
+        required: false
+        type: boolean
+        default: true
+      test_alert:
+        description: "Enviar una alerta de prueba sin intervenir"
+        required: false
+        type: boolean
+        default: false
+
+# El vigilante puede leer el JSON, administrar ejecuciones y avisar mediante
+# incidencias. No tiene permiso para modificar ningun archivo del repositorio.
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+concurrency:
+  group: vigilar-adjudicaciones
+  cancel-in-progress: true
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Descargar solamente el codigo del vigilante
+        uses: actions/checkout@v7
+
+      - name: Revisar workflow principal y generated_at
+        id: watchdog
+        uses: actions/github-script@v8
+        env:
+          PRIMARY_WORKFLOW: update-adjudicaciones.yml
+          DATA_PATH: data/adjudicaciones.json
+          STALE_MINUTES: "30"
+          RECOVERY_WAIT_MINUTES: "8"
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          TEST_ALERT: ${{ inputs.test_alert || false }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          retries: 2
+          retry-exempt-status-codes: 400,401,403,404,409,422
+          script: |
+            const runWatchdog = require("./.github/scripts/watchdog-adjudicaciones.js");
+            await runWatchdog({ github, context, core });
