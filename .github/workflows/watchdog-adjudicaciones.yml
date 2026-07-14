@@ -32,7 +32,7 @@ permissions:
 
 concurrency:
   group: vigilar-adjudicaciones
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   watchdog:
