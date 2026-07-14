@@ -101,6 +101,7 @@ DEFAULT_DATA = {
     "cuts": {
         "inicio": {
             "school_year": None,
+            "start_year": None,
             "updated_at": None,
             "rows": [],
             "pdfs": {},
@@ -288,6 +289,25 @@ def school_year_for_date(date_text: str | None, fallback: datetime) -> str:
     else:
         year = fallback.year if fallback.month >= 7 else fallback.year - 1
     return f"{year}-{year + 1}"
+
+
+def start_year_from_school_year(value: object) -> int | None:
+    match = re.fullmatch(r"(\d{4})-(\d{4})", clean(str(value or "")))
+    if not match:
+        return None
+    start_year, end_year = (int(part) for part in match.groups())
+    if end_year != start_year + 1:
+        return None
+    return start_year
+
+
+def ensure_period_metadata(data: dict) -> bool:
+    inicio = data.setdefault("cuts", {}).setdefault("inicio", {})
+    expected = start_year_from_school_year(inicio.get("school_year"))
+    if "start_year" in inicio and inicio.get("start_year") == expected:
+        return False
+    inicio["start_year"] = expected
+    return True
 
 
 def extract_pdf_links(page_url: str) -> list[dict[str, str]]:
@@ -760,7 +780,13 @@ def apply_inicio(data: dict, parsed_items: list[ParsedPdf]) -> bool:
         school_year = school_year_for_date(parsed.published_date, now_local())
         inicio = data["cuts"]["inicio"]
         if inicio.get("school_year") != school_year:
-            inicio.update({"school_year": school_year, "updated_at": parsed.published_date, "rows": [], "pdfs": {}})
+            inicio.update({
+                "school_year": school_year,
+                "start_year": start_year_from_school_year(school_year),
+                "updated_at": parsed.published_date,
+                "rows": [],
+                "pdfs": {},
+            })
             data["cuts"]["curso"].update({"school_year": school_year, "updated_at": parsed.published_date, "rows": [], "pdfs": []})
             changed = True
         existing = [row for row in inicio.get("rows", []) if len(row) < 7 or row[6] != body]
@@ -906,6 +932,7 @@ def main() -> int:
     changed = migrate_secondary_header_policy(data, centers_by_code)
     for mode in modes:
         changed = run_mode(data, mode, centers_by_code, target_school_year) or changed
+    changed = ensure_period_metadata(data) or changed
 
     save_data(data)
     print("JSON actualizado" if changed else "Sin cambios de adjudicaciones")
