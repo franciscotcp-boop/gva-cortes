@@ -12,6 +12,42 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import update_adjudicaciones as updater
 
 
+class PeriodMetadataTests(unittest.TestCase):
+    def test_start_year_is_derived_for_every_successive_year(self) -> None:
+        cases = {
+            "2025-2026": 2025,
+            "2028-2029": 2028,
+            "2999-3000": 2999,
+            "3000-3001": 3000,
+        }
+        for school_year, expected in cases.items():
+            with self.subTest(school_year=school_year):
+                self.assertEqual(
+                    updater.start_year_from_school_year(school_year),
+                    expected,
+                )
+
+    def test_invalid_school_year_is_not_published(self) -> None:
+        for value in (None, "", "2028", "2028-2030", "year-2028"):
+            with self.subTest(value=value):
+                self.assertIsNone(updater.start_year_from_school_year(value))
+
+    def test_existing_json_gets_start_year_without_touching_rows(self) -> None:
+        rows = [["03012736", "218", 526]]
+        data = {
+            "cuts": {
+                "inicio": {
+                    "school_year": "2028-2029",
+                    "rows": rows,
+                }
+            }
+        }
+        self.assertTrue(updater.ensure_period_metadata(data))
+        self.assertEqual(data["cuts"]["inicio"]["start_year"], 2028)
+        self.assertIs(data["cuts"]["inicio"]["rows"], rows)
+        self.assertFalse(updater.ensure_period_metadata(data))
+
+
 class SecondaryHeaderSpecialtyTests(unittest.TestCase):
     def test_empty_legacy_dataset_is_upgraded_without_downloads(self) -> None:
         data = {"schema_version": 1, "cuts": {"inicio": {"rows": []}}}
