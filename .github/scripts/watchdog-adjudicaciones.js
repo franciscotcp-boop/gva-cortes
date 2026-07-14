@@ -29,16 +29,15 @@ function madridCalendar(now = new Date()) {
   return { month: Number(values.month), weekday: values.weekday };
 }
 
-function shouldMonitor(now = new Date(), eventName = "schedule", workflowRunNumber = null) {
-  if (eventName !== "schedule" && eventName !== "workflow_run") return true;
+function shouldMonitor(now = new Date(), eventName = "schedule") {
+  if (eventName !== "schedule") return true;
   const { month, weekday } = madridCalendar(now);
-  const activeDay = month === 7 || month === 8 || weekday === "Tue" || weekday === "Thu";
-  if (!activeDay) return false;
-  if (eventName === "workflow_run") {
-    const runNumber = Number(workflowRunNumber);
-    return Number.isInteger(runNumber) && runNumber > 0 && runNumber % 2 === 0;
-  }
-  return true;
+  if (month === 7 || month === 8) return true;
+  return weekday === "Tue" || weekday === "Thu";
+}
+
+function monitorEventName(eventName, chainRun) {
+  return chainRun ? "schedule" : eventName;
 }
 
 function runAgeMinutes(run, now = new Date()) {
@@ -302,6 +301,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   const recoveryWaitMinutes = positiveNumber(process.env.RECOVERY_WAIT_MINUTES, 8);
   const dryRun = envBoolean(process.env.DRY_RUN);
   const testAlert = envBoolean(process.env.TEST_ALERT);
+  const chainRun = envBoolean(process.env.CHAIN_RUN);
 
   if (testAlert) {
     const issueUrl = await sendTestAlert(github, owner, repo);
@@ -311,10 +311,9 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     return { action: "test_alert", issueUrl };
   }
 
-  const workflowRunNumber = context.payload.workflow_run
-    ? context.payload.workflow_run.run_number
-    : null;
-  if (!shouldMonitor(now, context.eventName, workflowRunNumber)) {
+  const monitorActive = shouldMonitor(now, monitorEventName(context.eventName, chainRun));
+  core.setOutput("monitor_active", String(monitorActive));
+  if (!monitorActive) {
     core.notice("Fuera del calendario o del turno de vigilancia. No se realiza ninguna accion.");
     return { action: "outside_calendar" };
   }
@@ -461,6 +460,7 @@ module.exports._test = {
   envBoolean,
   generatedAtHealth,
   madridCalendar,
+  monitorEventName,
   positiveNumber,
   runAgeMinutes,
   shouldMonitor,
