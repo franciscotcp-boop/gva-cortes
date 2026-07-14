@@ -141,6 +141,13 @@ test("las comprobaciones manuales siempre estan permitidas", () => {
   assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), "workflow_dispatch"), true);
 });
 
+test("el respaldo workflow_run comprueba una de cada dos finalizaciones", () => {
+  const july = new Date("2026-07-14T12:00:00Z");
+  assert.equal(shouldMonitor(july, "workflow_run", 772), true);
+  assert.equal(shouldMonitor(july, "workflow_run", 773), false);
+  assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), "workflow_run", 774), false);
+});
+
 test("solo considera bloqueada una cola de mas de treinta minutos", () => {
   const now = new Date("2026-07-14T12:00:00Z");
   assert.match(staleRunReason({ status: "queued", created_at: isoMinutesBefore(now, 31) }, now, 30), /31 minutos/);
