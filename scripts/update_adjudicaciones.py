@@ -81,9 +81,10 @@ CUT_FORMAT = [
 
 SCHEMA_VERSION = 3
 CUT_POLICY = {
-    "rule": "En Otros Cuerpos se usa la copia canonica donde coinciden la especialidad del encabezado y la especialidad de la plaza.",
+    "version": 4,
+    "rule": "En Otros Cuerpos el corte pertenece a la bolsa indicada en el encabezado de cada pagina, aunque la plaza adjudicada sea de otra especialidad compatible.",
     "maestros": "Se conserva la especialidad de la plaza adjudicada.",
-    "secundaria_y_otros": "Se descartan las copias repetidas de una plaza publicadas bajo otras bolsas compatibles.",
+    "secundaria_y_otros": "Se usa siempre la especialidad del encabezado de la pagina, no la especialidad de la plaza que figura junto al docente.",
     "independent_extractors": ["pdfplumber", "pypdf"],
 }
 
@@ -511,7 +512,7 @@ CANDIDATE_RE = re.compile(r"^(\d{1,5})(?:\s*/\s*\d{1,5})?\s+(?!\s*/)[^,]+,\s+.+"
 CENTER_RE = re.compile(r"^\d{5,7}\s+(.+)\((\d{8})\)(.+)$")
 SPECIALTY_RE = re.compile(r"^([0-9A-Z]{3})\s*/\s*(.+)$")
 PAGE_SPECIALTY_PREFIX_RE = re.compile(r"^([0-9A-Z]{3})\s+(.+)$")
-PAGE_SPECIALTY_SUFFIX_RE = re.compile(r"^(.+?)\s+([0-9A-Z]{3})$")
+PAGE_SPECIALTY_SUFFIX_RE = re.compile(r"^(.+?)\s*([0-9A-Z]{3})$")
 
 
 def parse_date_from_text(text: str) -> str | None:
@@ -587,13 +588,11 @@ def parse_block(
     if not center_match:
         return None
     if body == "secundaria":
-        if page_specialty is None or specialty_match is None:
+        if page_specialty is None:
             return None
-        # Otros Cuerpos repeats the same awarded position in every compatible
-        # candidate pool. Only the copy whose page header matches the awarded
-        # position specialty has a meaningful cut for that specialty.
-        if specialty_match.group(1) != page_specialty[0]:
-            return None
+        # The page is the candidate pool whose cut is being measured. A person
+        # in that pool may be awarded a compatible position whose own specialty
+        # code is different, so the page header remains authoritative.
         specialty_code, specialty_name = page_specialty
     elif specialty_match:
         specialty_code = specialty_match.group(1)
@@ -625,6 +624,7 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
         if body is None:
             return None
 
+        total_pages = len(pdf.pages)
         for page_number, page in enumerate(pdf.pages, start=1):
             text = page.extract_text(x_tolerance=1, y_tolerance=3) or ""
             page_specialty = secondary_page_specialty(text) if body == "secundaria" else None
@@ -646,6 +646,12 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
             parsed = parse_block(current, body, page_specialty)
             if parsed:
                 rows.append(parsed)
+            if page_number % 250 == 0 or page_number == total_pages:
+                print(
+                    f"{body}: procesadas {page_number}/{total_pages} paginas "
+                    f"({len(rows)} adjudicaciones validas)",
+                    flush=True,
+                )
 
     best: OrderedDict[tuple[str, str], Adjudication] = OrderedDict()
     for row in rows:
@@ -773,7 +779,7 @@ def update_secondary_metadata(data: dict, parsed: ParsedPdf, mode: str) -> None:
         "body": "secundaria",
         "published_date": parsed.published_date,
         "rows": len(parsed.rows),
-        "parser_policy": "header_y_plaza_coincidentes",
+        "parser_policy": "especialidad_del_encabezado",
         "processed_at": now_local().isoformat(timespec="seconds"),
     }
 
@@ -1002,7 +1008,10 @@ def main() -> int:
     data = load_data()
     data["centers"], centers_by_code = load_centers(data.get("centers", []))
     target_school_year = None if args.include_old else (args.school_year or school_year_for_date(None, dt))
-    changed = migrate_secondary_header_policy(data, centers_by_code)
+    policy_changed = data.get("cut_policy") != CUT_POLICY
+    if policy_changed:
+        data["cut_policy"] = CUT_POLICY
+    changed = migrate_secondary_header_policy(data, centers_by_code) or policy_changed
     for mode in modes:
         changed = run_mode(data, mode, centers_by_code, target_school_year) or changed
     changed = ensure_period_metadata(data) or changed
