@@ -11,11 +11,24 @@ Este paquete mantiene `data/adjudicaciones.json` actualizado desde las fuentes o
 
 ## Calendario
 
-- Julio y agosto: revisa `https://ceice.gva.es/es/web/rrhh-educacion/adjudicacion3` cada 5 minutos y actualiza la seccion `inicio`.
-- Del 1 de septiembre al 30 de junio: revisa `https://ceice.gva.es/es/web/rrhh-educacion/resolucion` los martes y jueves cada 5 minutos y actualiza la seccion `curso`.
+- Julio y agosto: revisa `https://ceice.gva.es/es/web/rrhh-educacion/adjudicacion3` cada 4 horas y actualiza la seccion `inicio`.
+- Del 1 de septiembre al 30 de junio: revisa `https://ceice.gva.es/es/web/rrhh-educacion/resolucion` los martes y jueves cada 4 horas y actualiza la seccion `curso`.
 - Fuera de esas ventanas, el script no consulta las paginas oficiales.
 
-GitHub programa los horarios en UTC. Por eso el workflow tiene algo de margen y el script comprueba siempre el calendario real en la zona `Europe/Madrid`.
+GitHub activa un temporizador simple cada 4 horas. Antes de descargar dependencias o consultar las paginas oficiales, el workflow comprueba el calendario real en la zona `Europe/Madrid`; el script vuelve a validarlo como segunda proteccion. No existe ninguna cadena interna de relanzamientos entre comprobaciones.
+
+## Vigilante de recuperacion
+
+`.github/workflows/watchdog-adjudicaciones.yml` se ejecuta 35 minutos despues de cada comprobacion principal, con un grupo de concurrencia independiente. Solo actua dentro del mismo calendario que el actualizador.
+
+- Comprueba las ejecuciones del workflow principal y `generated_at`.
+- Considera bloqueada una ejecucion que lleve mas de 30 minutos en cola o en curso.
+- Considera retrasado el JSON cuando `generated_at` supera las 4 horas.
+- Cancela la ejecucion bloqueada y solicita una nueva comprobacion.
+- Espera el resultado y verifica que `generated_at` vuelva a estar actualizado.
+- Crea o actualiza una incidencia dirigida al propietario del repositorio. GitHub envia esa notificacion al correo configurado en la cuenta.
+
+El vigilante hace como maximo un intento de recuperacion por cada ciclo de cuatro horas. Tiene permisos `contents: read`, `actions: write` e `issues: write`; no puede modificar `data/adjudicaciones.json`, la web ni la app. La opcion manual `dry_run` permite comprobar su diagnostico sin cancelar o relanzar nada; `test_alert` verifica el canal de correo sin intervenir en el actualizador.
 
 ## Como subirlo
 
