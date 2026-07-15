@@ -37,10 +37,6 @@ function shouldMonitor(now = new Date(), eventName = "schedule") {
   return weekday === "Tue" || weekday === "Thu";
 }
 
-function monitorEventName(eventName, chainRun) {
-  return chainRun ? "schedule" : eventName;
-}
-
 function runAgeMinutes(run, now = new Date()) {
   const reference = run.status === "in_progress"
     ? (run.run_started_at || run.created_at)
@@ -315,12 +311,15 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   const { owner, repo } = context.repo;
   const workflowId = process.env.PRIMARY_WORKFLOW || "update-adjudicaciones.yml";
   const dataPath = process.env.DATA_PATH || "data/adjudicaciones.json";
-  const staleMinutes = positiveNumber(process.env.STALE_MINUTES, 30);
+  const staleMinutes = positiveNumber(
+    process.env.RUN_STALE_MINUTES || process.env.STALE_MINUTES,
+    30
+  );
+  const dataMaxAgeMinutes = positiveNumber(process.env.DATA_MAX_AGE_MINUTES, 240);
   const failureThreshold = positiveNumber(process.env.FAILURE_THRESHOLD, 3);
   const recoveryWaitMinutes = positiveNumber(process.env.RECOVERY_WAIT_MINUTES, 8);
   const dryRun = envBoolean(process.env.DRY_RUN);
   const testAlert = envBoolean(process.env.TEST_ALERT);
-  const chainRun = envBoolean(process.env.CHAIN_RUN);
 
   if (testAlert) {
     const issueUrl = await sendTestAlert(github, owner, repo);
@@ -330,7 +329,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     return { action: "test_alert", issueUrl };
   }
 
-  const monitorActive = shouldMonitor(now, monitorEventName(context.eventName, chainRun));
+  const monitorActive = shouldMonitor(now, context.eventName);
   core.setOutput("monitor_active", String(monitorActive));
   if (!monitorActive) {
     core.notice("Fuera del calendario o del turno de vigilancia. No se realiza ninguna accion.");
@@ -345,7 +344,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     metadataError = error.message;
     core.warning(`No se ha podido leer generated_at: ${metadataError}`);
   }
-  const generatedBefore = generatedAtHealth(metadataBefore.generatedAt, now, staleMinutes);
+  const generatedBefore = generatedAtHealth(metadataBefore.generatedAt, now, dataMaxAgeMinutes);
 
   const runs = await listPrimaryRuns(github, owner, repo, workflowId);
   const activeRuns = sortNewest(runs.filter(run => ACTIVE_STATUSES.has(run.status)));
@@ -357,6 +356,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   core.info(`generated_at: ${metadataBefore.generatedAt || "no disponible"}`);
   core.info(`Ejecuciones activas: ${activeRuns.length}; bloqueadas: ${staleRuns.length}`);
   core.info(`Fallos consecutivos: ${failedRuns.length}; umbral: ${failureThreshold}`);
+  core.info(`Limites: ejecucion ${staleMinutes} min; JSON ${dataMaxAgeMinutes} min`);
 
   const needsRecovery = staleRuns.length > 0 || generatedBefore.stale || Boolean(metadataError);
   if (!needsRecovery) {
@@ -422,7 +422,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
       ref: context.payload.repository && context.payload.repository.default_branch
         ? context.payload.repository.default_branch
         : "main",
-      inputs: { force: "auto", school_year: "", continue_chain: true },
+      inputs: { force: "auto", school_year: "" },
     });
     recoveryRun = await findNewDispatch(github, owner, repo, workflowId, dispatchedAt);
     recoveryStarted = Boolean(recoveryRun);
@@ -440,7 +440,11 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   } catch (error) {
     metadataAfterError = error.message;
   }
-  const generatedAfter = generatedAtHealth(metadataAfter.generatedAt, new Date(), staleMinutes);
+  const generatedAfter = generatedAtHealth(
+    metadataAfter.generatedAt,
+    new Date(),
+    dataMaxAgeMinutes
+  );
 
   const runSucceeded = Boolean(finalRun && finalRun.status === "completed" && finalRun.conclusion === "success");
   const recoverySucceeded = runSucceeded && !generatedAfter.stale && !metadataAfterError;
@@ -489,7 +493,6 @@ module.exports._test = {
   envBoolean,
   generatedAtHealth,
   madridCalendar,
-  monitorEventName,
   positiveNumber,
   runAgeMinutes,
   shouldMonitor,
