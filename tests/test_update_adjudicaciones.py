@@ -199,7 +199,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
     def test_pypdf_header_order(self) -> None:
         text = """Altres Cossos / Otros Cuerpos
 PROFESSORS D'ENSENYAMENT SECUNDARI
-TECNOLOGIA 219
+TECNOLOGIA219
 95
 """
         self.assertEqual(updater.secondary_page_specialty(text), ("219", "TECNOLOGIA"))
@@ -215,7 +215,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
             ("2A5", "MAQUINES, SERVEIS I PRODUCCIO"),
         )
 
-    def test_cross_pool_duplicate_is_ignored(self) -> None:
+    def test_compatible_position_uses_page_header_specialty(self) -> None:
         block = [
             "912 ORTEGA FERNANDEZ, RUBEN Voluntaria",
             "918342 ALMASSORA(12000251)IES ALVARO FALOMIR",
@@ -223,7 +223,11 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
             "Jornada completa VACANT Adjudicat",
         ]
         row = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"))
-        self.assertIsNone(row)
+        self.assertIsNotNone(row)
+        self.assertEqual(row.cut, 912)
+        self.assertEqual(row.center_code, "12000251")
+        self.assertEqual(row.specialty_code, "219")
+        self.assertEqual(row.specialty_name, "TECNOLOGIA")
 
     def test_matching_header_and_position_specialty_is_canonical(self) -> None:
         block = [
