@@ -8,7 +8,6 @@ const {
   buildIncidentReport,
   consecutiveFailureRuns,
   generatedAtHealth,
-  monitorEventName,
   shouldMonitor,
   staleRunReason,
 } = runWatchdog._test;
@@ -47,12 +46,12 @@ function context() {
 function setWatchdogEnv() {
   process.env.PRIMARY_WORKFLOW = "update-adjudicaciones.yml";
   process.env.DATA_PATH = "data/adjudicaciones.json";
-  process.env.STALE_MINUTES = "30";
+  process.env.RUN_STALE_MINUTES = "30";
+  process.env.DATA_MAX_AGE_MINUTES = "240";
   process.env.FAILURE_THRESHOLD = "3";
   process.env.RECOVERY_WAIT_MINUTES = "8";
   process.env.DRY_RUN = "false";
   process.env.TEST_ALERT = "false";
-  process.env.CHAIN_RUN = "false";
 }
 
 function recoveryGithub(now, conclusion = "success") {
@@ -145,12 +144,6 @@ test("las comprobaciones manuales siempre estan permitidas", () => {
   assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), "workflow_dispatch"), true);
 });
 
-test("la cadena automatica respeta el mismo calendario que el cron", () => {
-  assert.equal(monitorEventName("workflow_dispatch", true), "schedule");
-  assert.equal(monitorEventName("workflow_dispatch", false), "workflow_dispatch");
-  assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), monitorEventName("workflow_dispatch", true)), false);
-});
-
 test("solo considera bloqueada una cola de mas de treinta minutos", () => {
   const now = new Date("2026-07-14T12:00:00Z");
   assert.match(staleRunReason({ status: "queued", created_at: isoMinutesBefore(now, 31) }, now, 30), /31 minutos/);
@@ -160,9 +153,9 @@ test("solo considera bloqueada una cola de mas de treinta minutos", () => {
 
 test("detecta generated_at retrasado o no valido", () => {
   const now = new Date("2026-07-14T12:00:00Z");
-  assert.equal(generatedAtHealth(isoMinutesBefore(now, 31), now, 30).stale, true);
-  assert.equal(generatedAtHealth(isoMinutesBefore(now, 5), now, 30).stale, false);
-  assert.equal(generatedAtHealth("fecha-invalida", now, 30).stale, true);
+  assert.equal(generatedAtHealth(isoMinutesBefore(now, 241), now, 240).stale, true);
+  assert.equal(generatedAtHealth(isoMinutesBefore(now, 239), now, 240).stale, false);
+  assert.equal(generatedAtHealth("fecha-invalida", now, 240).stale, true);
 });
 
 test("detecta fallos consecutivos aunque haya ejecuciones activas o canceladas", () => {
@@ -215,6 +208,7 @@ test("simula cancelacion, relanzamiento y recuperacion correcta", async () => {
   assert.equal(calls.cancel[0].run_id, 751);
   assert.equal(calls.dispatch.length, 1);
   assert.equal(calls.dispatch[0].workflow_id, "update-adjudicaciones.yml");
+  assert.deepEqual(calls.dispatch[0].inputs, { force: "auto", school_year: "" });
   assert.equal(calls.issues.length, 1);
   assert.equal(calls.issues[0].assignees[0], "franciscotcp-boop");
   assert.equal(calls.issueUpdates.length, 1);
@@ -271,7 +265,7 @@ test("avisa tras varios fallos aunque haya una ejecucion reciente en marcha", as
     rest: {
       repos: {
         getContent: async () => ({
-          data: { content: encodedJson(isoMinutesBefore(now, 40)), sha: "blob-sha" },
+          data: { content: encodedJson(isoMinutesBefore(now, 250)), sha: "blob-sha" },
         }),
       },
       git: {
