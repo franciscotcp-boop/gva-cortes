@@ -12,6 +12,88 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import update_adjudicaciones as updater
 
 
+class ResilientHttpTests(unittest.TestCase):
+    def test_retries_after_two_minutes_and_allows_a_longer_attempt(self) -> None:
+        clock = [0.0]
+        attempts: list[float] = []
+        sleeps: list[float] = []
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        def request(_url: str, *, timeout_seconds: float) -> bytes:
+            attempts.append(timeout_seconds)
+            clock[0] += timeout_seconds
+            if len(attempts) < 3:
+                raise TimeoutError("timed out")
+            return b"respuesta"
+
+        result = updater.resilient_http_get(
+            "https://example.test/adjudicaciones",
+            retry_window_seconds=20,
+            initial_timeout_seconds=2,
+            retry_timeout_seconds=5,
+            retry_delay_seconds=1,
+            request_fn=request,
+            sleep_fn=sleep,
+            monotonic_fn=monotonic,
+        )
+
+        self.assertEqual(result, b"respuesta")
+        self.assertEqual(attempts, [2, 5, 5])
+        self.assertEqual(sleeps, [1, 1])
+
+    def test_stops_when_the_total_retry_window_is_exhausted(self) -> None:
+        clock = [0.0]
+        attempts: list[float] = []
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            clock[0] += seconds
+
+        def request(_url: str, *, timeout_seconds: float) -> bytes:
+            attempts.append(timeout_seconds)
+            clock[0] += timeout_seconds
+            raise TimeoutError("timed out")
+
+        with self.assertRaises(TimeoutError):
+            updater.resilient_http_get(
+                "https://example.test/adjudicaciones",
+                retry_window_seconds=6,
+                initial_timeout_seconds=2,
+                retry_timeout_seconds=5,
+                retry_delay_seconds=1,
+                request_fn=request,
+                sleep_fn=sleep,
+                monotonic_fn=monotonic,
+            )
+
+        self.assertEqual(attempts, [2, 3])
+
+    def test_does_not_retry_a_permanent_http_error(self) -> None:
+        attempts = []
+
+        def request(url: str, *, timeout_seconds: float) -> bytes:
+            attempts.append(timeout_seconds)
+            raise updater.urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+        with self.assertRaises(updater.urllib.error.HTTPError):
+            updater.resilient_http_get(
+                "https://example.test/no-existe",
+                retry_window_seconds=20,
+                request_fn=request,
+                sleep_fn=lambda _seconds: self.fail("No debe esperar ante un error 404"),
+            )
+
+        self.assertEqual(len(attempts), 1)
+
+
 class PeriodMetadataTests(unittest.TestCase):
     def test_start_year_is_derived_for_every_successive_year(self) -> None:
         cases = {
