@@ -6,10 +6,14 @@ import hashlib
 import html.parser
 import io
 import json
+import os
 import re
+import socket
 import ssl
 import sys
+import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import OrderedDict
@@ -28,6 +32,21 @@ TZ = ZoneInfo("Europe/Madrid")
 START_PAGE_URL = "https://ceice.gva.es/es/web/rrhh-educacion/adjudicacion3"
 COURSE_PAGE_URL = "https://ceice.gva.es/es/web/rrhh-educacion/resolucion"
 CENTERS_CSV_URL = "https://terramapas.icv.gva.es/12_Centros_wfs?request=GetFeature&service=WFS&version=2.0.0&typename=CentrosDocentesRegimen&outputformat=csv"
+
+
+def env_positive_seconds(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+HTTP_TIMEOUT_SECONDS = env_positive_seconds("HTTP_TIMEOUT_SECONDS", 120)
+SOURCE_RETRY_WINDOW_SECONDS = env_positive_seconds("SOURCE_RETRY_WINDOW_SECONDS", 1800)
+SOURCE_RETRY_TIMEOUT_SECONDS = env_positive_seconds("SOURCE_RETRY_TIMEOUT_SECONDS", 600)
+SOURCE_RETRY_DELAY_SECONDS = env_positive_seconds("SOURCE_RETRY_DELAY_SECONDS", 30)
+RETRYABLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 CENTER_FORMAT = [
     "codigo",
@@ -242,7 +261,7 @@ def blank_zero(value: str) -> str:
     return "" if value == "0" else value
 
 
-def http_get(url: str) -> bytes:
+def http_get(url: str, *, timeout_seconds: float = HTTP_TIMEOUT_SECONDS) -> bytes:
     request = urllib.request.Request(
         url,
         headers={
@@ -251,8 +270,62 @@ def http_get(url: str) -> bytes:
         },
     )
     context = ssl.create_default_context()
-    with urllib.request.urlopen(request, context=context, timeout=120) as response:
+    with urllib.request.urlopen(request, context=context, timeout=max(1, timeout_seconds)) as response:
         return response.read()
+
+
+def is_retryable_http_error(error: Exception) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in RETRYABLE_HTTP_STATUS
+    return isinstance(
+        error,
+        (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout, ssl.SSLError),
+    )
+
+
+def resilient_http_get(
+    url: str,
+    *,
+    retry_window_seconds: float = SOURCE_RETRY_WINDOW_SECONDS,
+    initial_timeout_seconds: float = HTTP_TIMEOUT_SECONDS,
+    retry_timeout_seconds: float = SOURCE_RETRY_TIMEOUT_SECONDS,
+    retry_delay_seconds: float = SOURCE_RETRY_DELAY_SECONDS,
+    request_fn=None,
+    sleep_fn=time.sleep,
+    monotonic_fn=time.monotonic,
+) -> bytes:
+    request_fn = request_fn or http_get
+    deadline = monotonic_fn() + max(0, retry_window_seconds)
+    attempt = 1
+
+    while True:
+        remaining = deadline - monotonic_fn()
+        requested_timeout = initial_timeout_seconds if attempt == 1 else retry_timeout_seconds
+        timeout_seconds = requested_timeout
+        if retry_window_seconds > 0:
+            timeout_seconds = min(requested_timeout, max(1, remaining))
+
+        try:
+            return request_fn(url, timeout_seconds=timeout_seconds)
+        except Exception as error:
+            remaining = deadline - monotonic_fn()
+            if (
+                not is_retryable_http_error(error)
+                or retry_window_seconds <= 0
+                or remaining <= 0
+            ):
+                raise
+
+            delay = min(retry_delay_seconds, remaining)
+            print(
+                f"WARNING: {url} no responde "
+                f"(intento {attempt}: {error}). Nuevo intento en {delay:.0f} segundos.",
+                file=sys.stderr,
+                flush=True,
+            )
+            if delay > 0:
+                sleep_fn(delay)
+            attempt += 1
 
 
 def load_data() -> dict:
@@ -312,7 +385,7 @@ def ensure_period_metadata(data: dict) -> bool:
 
 def extract_pdf_links(page_url: str) -> list[dict[str, str]]:
     parser = LinkParser(page_url)
-    parser.feed(http_get(page_url).decode("utf-8", errors="replace"))
+    parser.feed(resilient_http_get(page_url).decode("utf-8", errors="replace"))
     seen: set[str] = set()
     links: list[dict[str, str]] = []
     for link in parser.links:
