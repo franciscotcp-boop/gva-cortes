@@ -44,7 +44,7 @@ concurrency:
 jobs:
   update-json:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - name: Comprobar calendario
@@ -92,6 +92,10 @@ jobs:
         env:
           FORCE_MODE: ${{ github.event.inputs.force || 'auto' }}
           SCHOOL_YEAR: ${{ github.event.inputs.school_year || '' }}
+          HTTP_TIMEOUT_SECONDS: "120"
+          SOURCE_RETRY_WINDOW_SECONDS: "1800"
+          SOURCE_RETRY_TIMEOUT_SECONDS: "600"
+          SOURCE_RETRY_DELAY_SECONDS: "30"
         run: |
           args=()
           if [ -n "$SCHOOL_YEAR" ]; then
