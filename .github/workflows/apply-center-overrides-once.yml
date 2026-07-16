@@ -30,6 +30,7 @@ jobs:
           printf '%s' "$OVERRIDES_B64" | base64 --decode > data/center_overrides.json
           printf '%s' "$UPDATER_B64" | base64 --decode > scripts/update_adjudicaciones.py
           printf '%s' "$TESTS_B64" | base64 --decode > tests/test_update_adjudicaciones.py
+          sed -i 's/\r$//' data/center_overrides.json scripts/update_adjudicaciones.py tests/test_update_adjudicaciones.py
 
       - name: Incorporar las fichas sin alterar los cortes
         shell: bash
