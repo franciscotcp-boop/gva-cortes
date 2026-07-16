@@ -6,6 +6,7 @@ import hashlib
 import html.parser
 import io
 import json
+import math
 import os
 import re
 import socket
@@ -27,6 +28,7 @@ import pdfplumber
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "adjudicaciones.json"
+CENTER_OVERRIDES_PATH = ROOT / "data" / "center_overrides.json"
 TZ = ZoneInfo("Europe/Madrid")
 
 START_PAGE_URL = "https://ceice.gva.es/es/web/rrhh-educacion/adjudicacion3"
@@ -438,26 +440,72 @@ def center_name(row: dict[str, str]) -> str:
     return smart_title(" ".join(part for part in (row.get("dgenerica_cas", ""), row.get("despecifica", "")) if part))
 
 
+def load_center_overrides(path: Path | None = None) -> list[list]:
+    target = path or CENTER_OVERRIDES_PATH
+    if not target.exists():
+        return []
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    if payload.get("center_format") != CENTER_FORMAT:
+        raise ValueError(f"Formato de centros no valido en {target}")
+
+    rows = payload.get("centers")
+    if not isinstance(rows, list):
+        raise ValueError(f"Lista de centros no valida en {target}")
+
+    result: list[list] = []
+    seen: set[str] = set()
+    for raw in rows:
+        if not isinstance(raw, list) or len(raw) != len(CENTER_FORMAT):
+            raise ValueError(f"Ficha manual de centro no valida en {target}")
+        row = list(raw)
+        code = str(row[0]).strip()
+        if not code or code in seen:
+            raise ValueError(f"Codigo de centro manual vacio o duplicado: {code!r}")
+        if not all(isinstance(row[index], (int, float)) and math.isfinite(row[index]) for index in (14, 15)):
+            raise ValueError(f"Coordenadas manuales no validas para {code}")
+        seen.add(code)
+        result.append(row)
+    return result
+
+
+def merge_center_overrides(centers: list[list], overrides: list[list] | None = None) -> list[list]:
+    merged = [list(center) for center in centers]
+    positions = {str(center[0]): index for index, center in enumerate(merged)}
+    for override in load_center_overrides() if overrides is None else overrides:
+        code = str(override[0])
+        if code in positions:
+            merged[positions[code]] = list(override)
+        else:
+            positions[code] = len(merged)
+            merged.append(list(override))
+    merged.sort(key=lambda row: (norm(row[11]), norm(row[1]), str(row[0])))
+    return merged
+
+
+def centers_by_code(centers: list[list]) -> dict[str, dict[str, str]]:
+    return {
+        str(center[0]): {
+            "code": str(center[0]),
+            "name": center[1],
+            "municipality": center[11],
+            "province": center[13],
+            "lat": center[14],
+            "lon": center[15],
+        }
+        for center in centers
+    }
+
+
 def load_centers(existing: list[list]) -> tuple[list[list], dict[str, dict[str, str]]]:
     try:
         raw = http_get(CENTERS_CSV_URL).decode("utf-8", errors="replace")
     except Exception as exc:
         print(f"WARNING: no se ha podido refrescar la guia de centros: {exc}", file=sys.stderr)
-        by_code = {
-            str(c[0]): {
-                "code": str(c[0]),
-                "name": c[1],
-                "municipality": c[11],
-                "province": c[13],
-                "lat": c[14],
-                "lon": c[15],
-            }
-            for c in existing
-        }
-        return existing, by_code
+        centers = merge_center_overrides(existing)
+        return centers, centers_by_code(centers)
 
     centers: list[list] = []
-    by_code: dict[str, dict[str, str]] = {}
     for row in csv.DictReader(io.StringIO(raw)):
         code = clean(row.get("codcen", ""))
         if not code:
@@ -485,7 +533,6 @@ def load_centers(existing: list[list]) -> tuple[list[list], dict[str, dict[str, 
             "lat": float(row["latitud"]) if row.get("latitud") else None,
             "lon": float(row["longitud"]) if row.get("longitud") else None,
         }
-        by_code[code] = item
         centers.append([
             item["code"],
             item["name"],
@@ -504,8 +551,8 @@ def load_centers(existing: list[list]) -> tuple[list[list], dict[str, dict[str, 
             item["lat"],
             item["lon"],
         ])
-    centers.sort(key=lambda r: (norm(r[11]), norm(r[1]), r[0]))
-    return centers, by_code
+    centers = merge_center_overrides(centers)
+    return centers, centers_by_code(centers)
 
 
 CANDIDATE_RE = re.compile(r"^(\d{1,5})(?:\s*/\s*\d{1,5})?\s+(?!\s*/)[^,]+,\s+.+")

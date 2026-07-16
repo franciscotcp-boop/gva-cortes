@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +11,73 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import update_adjudicaciones as updater
+
+
+class CenterOverrideTests(unittest.TestCase):
+    def test_override_file_is_valid_and_unique(self) -> None:
+        rows = updater.load_center_overrides()
+        codes = [str(row[0]) for row in rows]
+
+        self.assertEqual(len(rows), 21)
+        self.assertEqual(len(codes), len(set(codes)))
+        self.assertIn("03021750", codes)
+        self.assertIn("03022092", codes)
+        self.assertIn("12008624", codes)
+
+    def test_merge_replaces_existing_rows_and_adds_missing_rows(self) -> None:
+        existing = [["A", "Original"] + [""] * 14]
+        replacement = ["A", "Corregido"] + [""] * 12 + [39.0, -0.4]
+        addition = ["B", "Nuevo"] + [""] * 12 + [40.0, 0.1]
+
+        merged = updater.merge_center_overrides(existing, [replacement, addition])
+        by_code = {row[0]: row for row in merged}
+
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(by_code["A"], replacement)
+        self.assertEqual(by_code["B"], addition)
+
+    def test_load_centers_keeps_overrides_when_guide_is_unavailable(self) -> None:
+        override = ["MANUAL", "Centro manual"] + [""] * 12 + [39.0, -0.4]
+        with patch.object(updater, "http_get", side_effect=TimeoutError("sin guia")), patch.object(
+            updater,
+            "load_center_overrides",
+            return_value=[override],
+        ):
+            centers, by_code = updater.load_centers([])
+
+        self.assertEqual(centers, [override])
+        self.assertEqual(by_code["MANUAL"]["name"], "Centro manual")
+
+    def test_load_centers_keeps_overrides_after_a_guide_refresh(self) -> None:
+        csv_data = (
+            "codcen,cod_estado,dlibre,dgenerica_cas,dgenerica_val,regimen,direccion,codpos,telef,mail,web,"
+            "noms_mun,localidad_oficial,comarca,provincia,latitud,longitud\n"
+            "GUIA,A,Centro guia,Centro Público,Centre Públic,Público,Calle 1,46000,960000000,guia@example.es,,"
+            "València,,València,València/Valencia,39.4,-0.4\n"
+        ).encode("utf-8")
+        override = ["MANUAL", "Centro manual"] + [""] * 12 + [39.0, -0.5]
+        with patch.object(updater, "http_get", return_value=csv_data), patch.object(
+            updater,
+            "load_center_overrides",
+            return_value=[override],
+        ):
+            centers, by_code = updater.load_centers([])
+
+        self.assertEqual({row[0] for row in centers}, {"GUIA", "MANUAL"})
+        self.assertEqual(set(by_code), {"GUIA", "MANUAL"})
+
+    def test_every_cut_center_has_a_geolocated_center_record(self) -> None:
+        data = json.loads(updater.DATA_PATH.read_text(encoding="utf-8"))
+        centers = {str(row[0]): row for row in data["centers"]}
+        cut_codes = {
+            str(row[0])
+            for period in ("inicio", "curso")
+            for row in data["cuts"][period]["rows"]
+        }
+
+        self.assertEqual(cut_codes - centers.keys(), set())
+        for code in cut_codes:
+            self.assertTrue(all(isinstance(centers[code][index], (int, float)) for index in (14, 15)))
 
 
 class ResilientHttpTests(unittest.TestCase):
