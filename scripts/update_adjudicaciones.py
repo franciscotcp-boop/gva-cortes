@@ -29,6 +29,7 @@ import pdfplumber
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "adjudicaciones.json"
 CENTER_OVERRIDES_PATH = ROOT / "data" / "center_overrides.json"
+CENTER_WEB_OVERRIDES_PATH = ROOT / "data" / "center_web_overrides.json"
 TZ = ZoneInfo("Europe/Madrid")
 
 START_PAGE_URL = "https://ceice.gva.es/es/web/rrhh-educacion/adjudicacion3"
@@ -483,6 +484,64 @@ def merge_center_overrides(centers: list[list], overrides: list[list] | None = N
     return merged
 
 
+def load_center_web_overrides(path: Path | None = None) -> dict[str, str | None]:
+    target = path or CENTER_WEB_OVERRIDES_PATH
+    if not target.exists():
+        return {}
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != 1:
+        raise ValueError(f"Formato de webs manuales no valido en {target}")
+
+    websites = payload.get("websites")
+    blocked = payload.get("blocked")
+    if not isinstance(websites, dict) or not isinstance(blocked, dict):
+        raise ValueError(f"Lista de webs manuales no valida en {target}")
+
+    result: dict[str, str | None] = {}
+    for raw_code, raw_url in websites.items():
+        code = str(raw_code).strip()
+        url = str(raw_url).strip() if isinstance(raw_url, str) else ""
+        parsed = urllib.parse.urlparse(url)
+        if (
+            not re.fullmatch(r"\d{8}", code)
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+        ):
+            raise ValueError(f"Web manual no valida para {code!r}: {raw_url!r}")
+        result[code] = url
+
+    for raw_code, reason in blocked.items():
+        code = str(raw_code).strip()
+        if (
+            not re.fullmatch(r"\d{8}", code)
+            or not isinstance(reason, str)
+            or not reason.strip()
+        ):
+            raise ValueError(f"Bloqueo de web no valido para {code!r}")
+        if code in result:
+            raise ValueError(f"Codigo con web y bloqueo simultaneos: {code}")
+        result[code] = None
+    return result
+
+
+def merge_center_web_overrides(
+    centers: list[list],
+    overrides: dict[str, str | None] | None = None,
+) -> list[list]:
+    merged = [list(center) for center in centers]
+    positions = {str(center[0]): index for index, center in enumerate(merged)}
+    entries = load_center_web_overrides() if overrides is None else overrides
+    for code, url in entries.items():
+        position = positions.get(str(code))
+        if position is None:
+            continue
+        merged[position][9] = url or ""
+        if url is None:
+            merged[position][10] = ""
+    return merged
+
+
 def centers_by_code(centers: list[list]) -> dict[str, dict[str, str]]:
     return {
         str(center[0]): {
@@ -502,7 +561,7 @@ def load_centers(existing: list[list]) -> tuple[list[list], dict[str, dict[str, 
         raw = http_get(CENTERS_CSV_URL).decode("utf-8", errors="replace")
     except Exception as exc:
         print(f"WARNING: no se ha podido refrescar la guia de centros: {exc}", file=sys.stderr)
-        centers = merge_center_overrides(existing)
+        centers = merge_center_web_overrides(merge_center_overrides(existing))
         return centers, centers_by_code(centers)
 
     centers: list[list] = []
@@ -551,7 +610,7 @@ def load_centers(existing: list[list]) -> tuple[list[list], dict[str, dict[str, 
             item["lat"],
             item["lon"],
         ])
-    centers = merge_center_overrides(centers)
+    centers = merge_center_web_overrides(merge_center_overrides(centers))
     return centers, centers_by_code(centers)
 
 

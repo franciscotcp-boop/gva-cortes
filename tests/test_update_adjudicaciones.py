@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -78,6 +79,96 @@ class CenterOverrideTests(unittest.TestCase):
         self.assertEqual(cut_codes - centers.keys(), set())
         for code in cut_codes:
             self.assertTrue(all(isinstance(centers[code][index], (int, float)) for index in (14, 15)))
+
+
+class CenterWebsiteOverrideTests(unittest.TestCase):
+    def test_web_override_file_is_valid_and_blocks_removed_site(self) -> None:
+        websites = updater.load_center_web_overrides()
+
+        self.assertEqual(len(websites), 745)
+        self.assertEqual(sum(url is not None for url in websites.values()), 744)
+        self.assertIsNone(websites["03003644"])
+        self.assertEqual(
+            websites["12003699"],
+            "https://portal.edu.gva.es/ceip_blasco_castello/",
+        )
+
+    def test_web_overrides_change_only_the_web_fields(self) -> None:
+        first = ["03000001", "Centro uno"] + [""] * 14
+        second = ["03000002", "Centro dos"] + [""] * 14
+        first[5] = "Calle original"
+        first[9] = "https://example.test/anterior/"
+        first[10] = "https://example.test/val/"
+        second[9] = "https://example.test/eliminada/"
+        second[10] = "https://example.test/eliminada-val/"
+
+        merged = updater.merge_center_web_overrides(
+            [first, second],
+            {
+                "03000001": "https://portal.edu.gva.es/03000001/",
+                "03000002": None,
+                "99999999": "https://portal.edu.gva.es/99999999/",
+            },
+        )
+        by_code = {row[0]: row for row in merged}
+
+        self.assertEqual(by_code["03000001"][5], "Calle original")
+        self.assertEqual(by_code["03000001"][9], "https://portal.edu.gva.es/03000001/")
+        self.assertEqual(by_code["03000001"][10], "https://example.test/val/")
+        self.assertEqual(by_code["03000002"][9:11], ["", ""])
+        self.assertEqual(len(merged), 2)
+
+    def test_invalid_web_override_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "webs.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "websites": {"03000001": "javascript:alert(1)"},
+                        "blocked": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                updater.load_center_web_overrides(path)
+
+    def test_load_centers_keeps_web_override_without_guide(self) -> None:
+        existing = ["03000001", "Centro existente"] + [""] * 12 + [39.0, -0.4]
+        with patch.object(updater, "http_get", side_effect=TimeoutError("sin guia")), patch.object(
+            updater,
+            "load_center_overrides",
+            return_value=[],
+        ), patch.object(
+            updater,
+            "load_center_web_overrides",
+            return_value={"03000001": "https://portal.edu.gva.es/03000001/"},
+        ):
+            centers, _ = updater.load_centers([existing])
+
+        self.assertEqual(centers[0][9], "https://portal.edu.gva.es/03000001/")
+
+    def test_load_centers_keeps_web_override_after_guide_refresh(self) -> None:
+        csv_data = (
+            "codcen,cod_estado,dlibre,dgenerica_cas,dgenerica_val,regimen,direccion,codpos,telef,mail,web,"
+            "noms_mun,localidad_oficial,comarca,provincia,latitud,longitud\n"
+            "03000001,A,Centro guia,Centro Publico,Centre Public,Publico,Calle 1,03000,960000000,"
+            "centro@example.es,,Alacant,,Alacanti,Alacant/Alicante,38.3,-0.4\n"
+        ).encode("utf-8")
+        with patch.object(updater, "http_get", return_value=csv_data), patch.object(
+            updater,
+            "load_center_overrides",
+            return_value=[],
+        ), patch.object(
+            updater,
+            "load_center_web_overrides",
+            return_value={"03000001": "https://portal.edu.gva.es/03000001/"},
+        ):
+            centers, _ = updater.load_centers([])
+
+        self.assertEqual(centers[0][9], "https://portal.edu.gva.es/03000001/")
 
 
 class ResilientHttpTests(unittest.TestCase):
