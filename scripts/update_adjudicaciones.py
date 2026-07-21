@@ -84,10 +84,10 @@ CUT_FORMAT = [
 
 SCHEMA_VERSION = 3
 CUT_POLICY = {
-    "version": 4,
-    "rule": "En Otros Cuerpos el corte pertenece a la bolsa indicada en el encabezado de cada pagina, aunque la plaza adjudicada sea de otra especialidad compatible.",
+    "version": 5,
+    "rule": "En Otros Cuerpos solo computa una adjudicacion cuando la especialidad del encabezado coincide con la especialidad de la plaza adjudicada junto al docente.",
     "maestros": "Se conserva la especialidad de la plaza adjudicada.",
-    "secundaria_y_otros": "Se usa siempre la especialidad del encabezado de la pagina, no la especialidad de la plaza que figura junto al docente.",
+    "secundaria_y_otros": "Se exige que el codigo del encabezado y el codigo de la plaza adjudicada sean iguales; las filas de especialidades compatibles distintas no generan corte.",
     "independent_extractors": ["pdfplumber", "pypdf"],
 }
 
@@ -694,11 +694,13 @@ def parse_block(
     if not center_match:
         return None
     if body == "secundaria":
-        if page_specialty is None:
+        if page_specialty is None or specialty_match is None:
             return None
-        # The page is the candidate pool whose cut is being measured. A person
-        # in that pool may be awarded a compatible position whose own specialty
-        # code is different, so the page header remains authoritative.
+        assigned_specialty_code = specialty_match.group(1)
+        if assigned_specialty_code != page_specialty[0]:
+            return None
+        # The row only belongs to this cut when the candidate-pool header and
+        # the specialty of the awarded position identify the same specialty.
         specialty_code, specialty_name = page_specialty
     elif specialty_match:
         specialty_code = specialty_match.group(1)
@@ -885,13 +887,14 @@ def update_secondary_metadata(data: dict, parsed: ParsedPdf, mode: str) -> None:
         "body": "secundaria",
         "published_date": parsed.published_date,
         "rows": len(parsed.rows),
-        "parser_policy": "especialidad_del_encabezado",
+        "parser_policy": "encabezado_y_especialidad_adjudicada_coincidentes",
         "processed_at": now_local().isoformat(timespec="seconds"),
     }
 
 
 def migrate_secondary_header_policy(data: dict, centers_by_code: dict[str, dict[str, str]]) -> bool:
-    if int(data.get("schema_version") or 0) >= SCHEMA_VERSION:
+    current_policy_version = int(data.get("cut_policy", {}).get("version") or 0)
+    if current_policy_version >= CUT_POLICY["version"]:
         return False
 
     inicio = data.get("cuts", {}).get("inicio", {})
@@ -946,7 +949,7 @@ def migrate_secondary_header_policy(data: dict, centers_by_code: dict[str, dict[
     data["schema_version"] = SCHEMA_VERSION
     data["cut_policy"] = CUT_POLICY
     print(
-        "Migracion por encabezados completada: "
+        "Migracion por coincidencia de especialidades completada: "
         f"inicio_secundaria={len(parsed_start.rows)} "
         f"curso_secundaria={len(secondary_course)}"
     )
@@ -1114,10 +1117,11 @@ def main() -> int:
     data = load_data()
     data["centers"], centers_by_code = load_centers(data.get("centers", []))
     target_school_year = None if args.include_old else (args.school_year or school_year_for_date(None, dt))
+    changed = migrate_secondary_header_policy(data, centers_by_code)
     policy_changed = data.get("cut_policy") != CUT_POLICY
     if policy_changed:
         data["cut_policy"] = CUT_POLICY
-    changed = migrate_secondary_header_policy(data, centers_by_code) or policy_changed
+    changed = changed or policy_changed
     for mode in modes:
         changed = run_mode(data, mode, centers_by_code, target_school_year) or changed
     changed = ensure_period_metadata(data) or changed
