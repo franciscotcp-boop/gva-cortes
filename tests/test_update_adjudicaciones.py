@@ -291,12 +291,20 @@ class PeriodMetadataTests(unittest.TestCase):
 
 class SecondaryHeaderSpecialtyTests(unittest.TestCase):
     def test_empty_legacy_dataset_is_upgraded_without_downloads(self) -> None:
-        data = {"schema_version": 1, "cuts": {"inicio": {"rows": []}}}
+        data = {
+            "schema_version": updater.SCHEMA_VERSION,
+            "cut_policy": {"version": 4},
+            "cuts": {"inicio": {"rows": []}},
+        }
         self.assertTrue(updater.migrate_secondary_header_policy(data, {}))
         self.assertEqual(data["schema_version"], updater.SCHEMA_VERSION)
+        self.assertEqual(data["cut_policy"], updater.CUT_POLICY)
 
-    def test_current_schema_does_not_migrate_again(self) -> None:
-        data = {"schema_version": updater.SCHEMA_VERSION}
+    def test_current_policy_does_not_migrate_again(self) -> None:
+        data = {
+            "schema_version": updater.SCHEMA_VERSION,
+            "cut_policy": updater.CUT_POLICY,
+        }
         self.assertFalse(updater.migrate_secondary_header_policy(data, {}))
 
     def test_legacy_migration_rebuilds_start_and_course(self) -> None:
@@ -306,6 +314,7 @@ class SecondaryHeaderSpecialtyTests(unittest.TestCase):
         maestro_course = ["M2", "128", 20, "PRIMARIA", "CEIP", "LLOC", "maestros", "sub_determinada", "curso"]
         data = {
             "schema_version": 2,
+            "cut_policy": {"version": 4},
             "cuts": {
                 "inicio": {
                     "rows": [maestro_start, ["S1", "219", 999, "TECNOLOGIA", "IES", "LLOC", "secundaria", "", "inicio"]],
@@ -374,7 +383,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
             ("2A5", "MAQUINES, SERVEIS I PRODUCCIO"),
         )
 
-    def test_compatible_position_uses_page_header_specialty(self) -> None:
+    def test_different_awarded_specialty_is_not_a_cut(self) -> None:
         block = [
             "912 ORTEGA FERNANDEZ, RUBEN Voluntaria",
             "918342 ALMASSORA(12000251)IES ALVARO FALOMIR",
@@ -382,11 +391,32 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
             "Jornada completa VACANT Adjudicat",
         ]
         row = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"))
-        self.assertIsNotNone(row)
-        self.assertEqual(row.cut, 912)
-        self.assertEqual(row.center_code, "12000251")
-        self.assertEqual(row.specialty_code, "219")
-        self.assertEqual(row.specialty_name, "TECNOLOGIA")
+        self.assertIsNone(row)
+
+    def test_canos_is_geography_but_not_mathematics(self) -> None:
+        block = [
+            "1940 CANOS CABEDO, MARIA DE LA PURIFICACION Voluntaria",
+            "875307 BORRIANA(12000704)IES JAUME I",
+            "205 / GEOGRAFIA I HISTORIA",
+            "Jornada completa VACANT Adjudicat",
+        ]
+        self.assertIsNone(
+            updater.parse_block(block, "secundaria", ("206", "MATEMATIQUES"))
+        )
+
+        geography = updater.parse_block(
+            [
+                "230 CANOS CABEDO, MARIA DE LA PURIFICACION Voluntaria",
+                "875307 BORRIANA(12000704)IES JAUME I",
+                "205 / GEOGRAFIA I HISTORIA",
+                "Jornada completa VACANT Adjudicat",
+            ],
+            "secundaria",
+            ("205", "GEOGRAFIA I HISTORIA"),
+        )
+        self.assertIsNotNone(geography)
+        self.assertEqual(geography.cut, 230)
+        self.assertEqual(geography.specialty_code, "205")
 
     def test_matching_header_and_position_specialty_is_canonical(self) -> None:
         block = [
