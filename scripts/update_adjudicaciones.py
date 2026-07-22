@@ -86,14 +86,16 @@ CUT_FORMAT = [
     "origen",
     "requisitoIngles",
     "itinerante",
+    "posicionEspecialidad",
 ]
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SECONDARY_MATCH_POLICY_VERSION = 5
 CUT_POLICY = {
-    "version": 7,
-    "rule": "En Otros Cuerpos solo computa una adjudicacion cuando la especialidad del encabezado coincide con la especialidad de la plaza adjudicada junto al docente. En Maestros se identifica el requisito de ingles exclusivamente por / ING. en el bloque de la plaza adjudicada. La itinerancia se toma exclusivamente del mismo bloque adjudicado.",
+    "version": 8,
+    "rule": "En Otros Cuerpos solo computa una adjudicacion cuando la especialidad del encabezado coincide con la especialidad de la plaza adjudicada junto al docente. En Maestros se identifica el requisito de ingles exclusivamente por / ING. en el bloque de la plaza adjudicada. La itinerancia se toma exclusivamente del mismo bloque adjudicado. En Maestros se conserva la posicion general y se incorpora por separado la posicion posterior a la adjudicacion dentro de la especialidad.",
     "maestros": "Se conserva la especialidad de la plaza adjudicada y se marcan requisitoIngles e itinerante solo cuando esa misma adjudicacion contiene / ING. o Itinerante.",
+    "master_positions": "numeroCorte es la posicion posterior a la adjudicacion en la bolsa general de Maestros; posicionEspecialidad es la posicion posterior a la misma adjudicacion dentro de la especialidad.",
     "secundaria_y_otros": "Se exige que el codigo del encabezado y el codigo de la plaza adjudicada sean iguales; las filas de especialidades compatibles distintas no generan corte.",
     "independent_extractors": ["pdfplumber", "pypdf"],
 }
@@ -115,6 +117,21 @@ MAESTRO_SPECIALTY_CODES = frozenset({
     "153",
 })
 
+MASTER_SPECIALTY_POSITION_ALIASES = {
+    "151": "126",
+    "152": "127",
+    "153": "128",
+}
+
+MASTER_CUT_POSITION_POLICY = {
+    "version": 1,
+    "general_field": "master_general_positions.position_after_adjudication",
+    "specialty_field": "positions.position_after_adjudication",
+    "specialty_aliases": MASTER_SPECIALTY_POSITION_ALIASES,
+    "source": "data/posiciones_bolsa.json",
+    "previous_course_policy": "No se mezclan posiciones de especialidad del curso nuevo con adjudicaciones continuas pertenecientes al curso anterior.",
+}
+
 VACANCY_TOTALS_POLICY = {
     "version": 1,
     "inicio": "Se sustituye por el recuento completo de los PDF mas recientes de inicio de curso de cada cuerpo.",
@@ -133,6 +150,7 @@ DEFAULT_DATA = {
     "center_format": CENTER_FORMAT,
     "cut_format": CUT_FORMAT,
     "cut_policy": CUT_POLICY,
+    "master_cut_position_policy": MASTER_CUT_POSITION_POLICY,
     "vacancy_totals_policy": VACANCY_TOTALS_POLICY,
     "vacancy_totals": {
         "schema_version": 1,
@@ -368,6 +386,7 @@ def load_data() -> dict:
     data.setdefault("cuts", {}).setdefault("inicio", DEFAULT_DATA["cuts"]["inicio"].copy())
     data.setdefault("cuts", {}).setdefault("curso", DEFAULT_DATA["cuts"]["curso"].copy())
     data.setdefault("processed_pdfs", {})
+    data.setdefault("master_cut_position_policy", MASTER_CUT_POSITION_POLICY)
     data.setdefault("vacancy_totals_policy", VACANCY_TOTALS_POLICY)
     data.setdefault("vacancy_totals", json.loads(json.dumps(DEFAULT_DATA["vacancy_totals"])))
     return data
@@ -404,6 +423,97 @@ def start_year_from_school_year(value: object) -> int | None:
     if end_year != start_year + 1:
         return None
     return start_year
+
+
+def normalized_school_year(value: object) -> str | None:
+    match = re.fullmatch(r"\s*(\d{4})\s*[-/]\s*(\d{4})\s*", str(value or ""))
+    if not match:
+        return None
+    start_year, end_year = (int(part) for part in match.groups())
+    if end_year != start_year + 1:
+        return None
+    return f"{start_year}-{end_year}"
+
+
+def positive_integer(value: object) -> int | None:
+    try:
+        number = int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return number if number is not None and number > 0 else None
+
+
+def metadata_field_index(fields: object, name: str, fallback: int) -> int:
+    if isinstance(fields, list) and name in fields:
+        return fields.index(name)
+    return fallback
+
+
+class MasterCutPositionIndex:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.enabled = False
+        self.academic_year: str | None = None
+        self.by_general_specialty: dict[tuple[int, str], int] = {}
+        if not self.path.exists():
+            print(f"Posiciones de corte de Maestros: omitidas; no existe {self.path}")
+            return
+
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.academic_year = normalized_school_year(data.get("academic_year"))
+        if self.academic_year is None:
+            print("Posiciones de corte de Maestros: omitidas; curso no valido")
+            return
+
+        person_fields = data.get("person_fields")
+        position_fields = data.get("position_fields")
+        general_fields = data.get("master_general_position_fields")
+        person_positions_index = metadata_field_index(person_fields, "positions", 2)
+        person_source_index = metadata_field_index(person_fields, "source", 3)
+        person_general_index = metadata_field_index(person_fields, "master_general_positions", 4)
+        specialty_code_index = metadata_field_index(position_fields, "specialty_code", 0)
+        specialty_after_index = metadata_field_index(position_fields, "position_after_adjudication", 3)
+        general_after_index = metadata_field_index(general_fields, "position_after_adjudication", 1)
+
+        for person in data.get("people", []):
+            if not isinstance(person, list):
+                continue
+            source = str(person[person_source_index] or "") if len(person) > person_source_index else ""
+            if source not in {"maestros", "mixto"}:
+                continue
+            general = person[person_general_index] if len(person) > person_general_index else None
+            positions = person[person_positions_index] if len(person) > person_positions_index else None
+            if not isinstance(general, list) or len(general) <= general_after_index or not isinstance(positions, list):
+                continue
+            general_after = positive_integer(general[general_after_index])
+            if general_after is None:
+                continue
+            for position in positions:
+                if not isinstance(position, list) or len(position) <= max(specialty_code_index, specialty_after_index):
+                    continue
+                code = str(position[specialty_code_index] or "")
+                specialty_after = positive_integer(position[specialty_after_index])
+                if specialty_after is None:
+                    continue
+                key = (general_after, code)
+                previous = self.by_general_specialty.get(key)
+                if previous is not None and previous != specialty_after:
+                    raise RuntimeError(
+                        "Posiciones de corte de Maestros ambiguas para "
+                        f"posicion general {general_after} y especialidad {code}"
+                    )
+                self.by_general_specialty[key] = specialty_after
+        self.enabled = bool(self.by_general_specialty)
+
+    def resolve(self, general_position: object, specialty_code: object, school_year: object) -> int | None:
+        if not self.enabled or normalized_school_year(school_year) != self.academic_year:
+            return None
+        general = positive_integer(general_position)
+        if general is None:
+            return None
+        code = str(specialty_code or "")
+        lookup_code = MASTER_SPECIALTY_POSITION_ALIASES.get(code, code)
+        return self.by_general_specialty.get((general, lookup_code))
 
 
 def ensure_period_metadata(data: dict) -> bool:
@@ -783,7 +893,13 @@ def parse_block(
     )
 
 
-def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, str]]) -> ParsedPdf | None:
+def parse_pdf(
+    url: str,
+    pdf_bytes: bytes,
+    centers_by_code: dict[str, dict[str, str]],
+    master_positions: MasterCutPositionIndex | None = None,
+    mode: str | None = None,
+) -> ParsedPdf | None:
     sha = hashlib.sha256(pdf_bytes).hexdigest()
     rows: list[Adjudication] = []
     body: str | None = None
@@ -834,8 +950,16 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
             best[key] = row
 
     output: list[list] = []
+    parsed_school_year = school_year_for_date(published_date, now_local())
     for row in best.values():
         center = centers_by_code.get(row.center_code)
+        specialty_position = None
+        if row.body == "maestros" and mode == "inicio" and master_positions is not None:
+            specialty_position = master_positions.resolve(
+                row.cut,
+                row.specialty_code,
+                parsed_school_year,
+            )
         output.append([
             row.center_code,
             row.specialty_code,
@@ -847,6 +971,7 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
             row.placement_type,
             row.english_requirement,
             row.itinerant,
+            specialty_position,
         ])
 
     assignments: list[Adjudication] = []
@@ -921,12 +1046,23 @@ def row_itinerant(row: list) -> bool:
     return False
 
 
+def row_specialty_position(row: list) -> int | None:
+    if len(row) >= 9 and row[8] in {"inicio", "curso"}:
+        return positive_integer(row[11]) if len(row) >= 12 else None
+    return positive_integer(row[10]) if len(row) >= 11 else None
+
+
 def row_with_origin(row: list, origin: str) -> list:
     if len(row) >= 8 and row[7] not in {"inicio", "curso"}:
         base = row[:8]
     else:
         base = (row[:7] if len(row) >= 7 else row + [""] * (7 - len(row))) + [""]
-    return base + [origin, row_english_requirement(row), row_itinerant(row)]
+    return base + [
+        origin,
+        row_english_requirement(row),
+        row_itinerant(row),
+        row_specialty_position(row),
+    ]
 
 
 def row_origin(row: list, default: str) -> str:
@@ -951,6 +1087,59 @@ def ensure_cut_schema(data: dict) -> bool:
         changed = True
     if data.get("cut_format") != CUT_FORMAT:
         data["cut_format"] = CUT_FORMAT
+        changed = True
+    return changed
+
+
+def enrich_master_cut_positions(data: dict, positions: MasterCutPositionIndex | None) -> bool:
+    if positions is None or not positions.enabled:
+        return False
+    inicio = data.setdefault("cuts", {}).setdefault("inicio", {})
+    school_year = normalized_school_year(inicio.get("school_year"))
+    if school_year is None or school_year != positions.academic_year:
+        return False
+
+    changed = False
+    start_values: dict[str, int] = {}
+    start_rows: list[list] = []
+    unresolved = 0
+    for raw in inicio.setdefault("rows", []):
+        row = row_with_origin(raw, row_origin(raw, "inicio"))
+        value = None
+        if len(row) >= 7 and str(row[6]) == "maestros":
+            value = positions.resolve(row[2], row[1], school_year)
+            if value is None:
+                unresolved += 1
+            else:
+                start_values[row_key(row)] = value
+        if row[11] != value:
+            row[11] = value
+            changed = True
+        start_rows.append(row)
+    if unresolved:
+        print(
+            "WARNING: faltan posiciones por especialidad para "
+            f"{unresolved} cortes de inicio de Maestros",
+            file=sys.stderr,
+        )
+    if start_rows != inicio.get("rows"):
+        inicio["rows"] = start_rows
+        changed = True
+
+    curso = data.setdefault("cuts", {}).setdefault("curso", {})
+    course_rows: list[list] = []
+    for raw in curso.setdefault("rows", []):
+        origin = row_origin(raw, "inicio")
+        row = row_with_origin(raw, origin)
+        value = None
+        if len(row) >= 7 and str(row[6]) == "maestros" and origin == "inicio":
+            value = start_values.get(row_key(row))
+        if row[11] != value:
+            row[11] = value
+            changed = True
+        course_rows.append(row)
+    if course_rows != curso.get("rows"):
+        curso["rows"] = course_rows
         changed = True
     return changed
 
@@ -1349,6 +1538,7 @@ def run_mode(
     centers_by_code: dict[str, dict[str, str]],
     target_school_year: str | None,
     position_context: PositionContextUpdater | None = None,
+    master_positions: MasterCutPositionIndex | None = None,
 ) -> bool:
     page_url = START_PAGE_URL if mode == "inicio" else COURSE_PAGE_URL
     links = extract_pdf_links(page_url)
@@ -1365,7 +1555,13 @@ def run_mode(
         try:
             pdf_bytes = http_get(link["url"])
             sha256 = hashlib.sha256(pdf_bytes).hexdigest()
-            parsed = parse_pdf(link["url"], pdf_bytes, centers_by_code)
+            parsed = parse_pdf(
+                link["url"],
+                pdf_bytes,
+                centers_by_code,
+                master_positions,
+                mode,
+            )
             if parsed is None:
                 print(f"{mode}: omitido PDF no clasificable {link['url']}")
                 mark_ignored(data, link["url"], sha256, mode, "pdf no clasificable")
@@ -1439,16 +1635,21 @@ def main() -> int:
             Path(args.positions),
             Path(args.position_context_state),
         )
+    master_positions = MasterCutPositionIndex(Path(args.positions))
     target_school_year = None if args.include_old else (args.school_year or school_year_for_date(None, dt))
     changed = migrate_secondary_header_policy(data, centers_by_code)
     changed = ensure_cut_schema(data) or changed
+    changed = enrich_master_cut_positions(data, master_positions) or changed
     policy_changed = data.get("cut_policy") != CUT_POLICY
     if policy_changed:
         data["cut_policy"] = CUT_POLICY
     vacancy_policy_changed = data.get("vacancy_totals_policy") != VACANCY_TOTALS_POLICY
     if vacancy_policy_changed:
         data["vacancy_totals_policy"] = VACANCY_TOTALS_POLICY
-    changed = changed or policy_changed or vacancy_policy_changed
+    master_position_policy_changed = data.get("master_cut_position_policy") != MASTER_CUT_POSITION_POLICY
+    if master_position_policy_changed:
+        data["master_cut_position_policy"] = MASTER_CUT_POSITION_POLICY
+    changed = changed or policy_changed or vacancy_policy_changed or master_position_policy_changed
     for mode in modes:
         changed = run_mode(
             data,
@@ -1456,7 +1657,9 @@ def main() -> int:
             centers_by_code,
             target_school_year,
             position_context,
+            master_positions,
         ) or changed
+    changed = enrich_master_cut_positions(data, master_positions) or changed
     changed = ensure_period_metadata(data) or changed
 
     save_data(data)

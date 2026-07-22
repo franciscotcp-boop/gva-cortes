@@ -662,24 +662,31 @@ class CutSchemaTests(unittest.TestCase):
         self.assertEqual(new[:9], old)
         self.assertEqual(new[9], False)
         self.assertEqual(new[10], False)
-        self.assertEqual(len(new), 11)
+        self.assertIsNone(new[11])
+        self.assertEqual(len(new), 12)
 
     def test_new_parsed_row_keeps_true_flag_after_origin_is_added(self) -> None:
         parsed = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", True]
         stored = updater.row_with_origin(parsed, "curso")
 
         self.assertEqual(stored[:8], parsed[:8])
-        self.assertEqual(stored[8:], ["curso", True, False])
+        self.assertEqual(stored[8:], ["curso", True, False, None])
 
     def test_new_parsed_row_keeps_english_and_itinerant_flags_independently(self) -> None:
         parsed = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", True, False]
         stored = updater.row_with_origin(parsed, "inicio")
 
-        self.assertEqual(stored[8:], ["inicio", True, False])
+        self.assertEqual(stored[8:], ["inicio", True, False, None])
 
         parsed[8:] = [False, True]
         stored = updater.row_with_origin(parsed, "curso")
-        self.assertEqual(stored[8:], ["curso", False, True])
+        self.assertEqual(stored[8:], ["curso", False, True, None])
+
+    def test_new_parsed_row_keeps_master_specialty_position(self) -> None:
+        parsed = ["M1", "126", 4951, "AL", "CEIP", "LLOC", "maestros", "vacante", False, False, 489]
+        stored = updater.row_with_origin(parsed, "inicio")
+
+        self.assertEqual(stored[8:], ["inicio", False, False, 489])
 
     def test_schema_upgrade_is_idempotent(self) -> None:
         legacy = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", "inicio"]
@@ -691,10 +698,102 @@ class CutSchemaTests(unittest.TestCase):
 
         self.assertTrue(updater.ensure_cut_schema(data))
         self.assertEqual(data["schema_version"], updater.SCHEMA_VERSION)
-        self.assertEqual(data["cut_format"][-2:], ["requisitoIngles", "itinerante"])
+        self.assertEqual(
+            data["cut_format"][-3:],
+            ["requisitoIngles", "itinerante", "posicionEspecialidad"],
+        )
         self.assertEqual(data["cuts"]["inicio"]["rows"][0][9], False)
         self.assertEqual(data["cuts"]["inicio"]["rows"][0][10], False)
+        self.assertIsNone(data["cuts"]["inicio"]["rows"][0][11])
         self.assertFalse(updater.ensure_cut_schema(data))
+
+
+class MasterCutPositionTests(unittest.TestCase):
+    def positions_file(self, directory: Path) -> Path:
+        path = directory / "posiciones_bolsa.json"
+        payload = {
+            "schema_version": 9,
+            "academic_year": "2026/2027",
+            "person_fields": [
+                "display_name",
+                "official_name",
+                "positions",
+                "source",
+                "master_general_positions",
+                "gender",
+            ],
+            "master_general_position_fields": [
+                "position_at_course_start",
+                "position_after_adjudication",
+            ],
+            "position_fields": [
+                "specialty_code",
+                "position_at_course_start",
+                "position_without_deactivated",
+                "position_after_adjudication",
+            ],
+            "people": [
+                [
+                    "Teresa Mercedes Adsuar Mas",
+                    "ADSUAR MAS, TERESA MERCEDES",
+                    [["126", 495, 410, 489]],
+                    "maestros",
+                    [4998, 4951],
+                    "f",
+                ],
+                [
+                    "Persona FPA AL",
+                    "PERSONA, FPA AL",
+                    [["126", 12, 4, 12]],
+                    "mixto",
+                    [101, 101],
+                    "f",
+                ],
+            ],
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_index_resolves_master_position_and_fpa_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = updater.MasterCutPositionIndex(self.positions_file(Path(tmp)))
+
+        self.assertEqual(index.academic_year, "2026-2027")
+        self.assertEqual(index.resolve(4951, "126", "2026-2027"), 489)
+        self.assertEqual(index.resolve(101, "151", "2026-2027"), 12)
+        self.assertIsNone(index.resolve(4951, "126", "2025-2026"))
+        self.assertIsNone(index.resolve(4951, "206", "2026-2027"))
+
+    def test_enrichment_applies_only_to_current_master_start_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = updater.MasterCutPositionIndex(self.positions_file(Path(tmp)))
+        start_master = ["03004715", "126", 4951, "AL", "CEIP", "ELX", "maestros", "vacante", "inicio", False, False]
+        start_secondary = ["03000000", "206", 10, "MAT", "IES", "ELX", "secundaria", "vacante", "inicio", False, False]
+        old_course = ["03011111", "126", 4951, "AL", "CEIP", "ELX", "maestros", "sub_indeterminada", "curso", False, False]
+        data = {
+            "cuts": {
+                "inicio": {
+                    "school_year": "2026-2027",
+                    "rows": [start_master, start_secondary],
+                },
+                "curso": {
+                    "school_year": "2026-2027",
+                    "rows": [start_master, old_course, start_secondary],
+                },
+            }
+        }
+
+        self.assertTrue(updater.ensure_cut_schema(data))
+        self.assertTrue(updater.enrich_master_cut_positions(data, index))
+        start_rows = {updater.row_key(row): row for row in data["cuts"]["inicio"]["rows"]}
+        course_rows = {
+            (updater.row_key(row), updater.row_origin(row, "inicio")): row
+            for row in data["cuts"]["curso"]["rows"]
+        }
+        self.assertEqual(start_rows["03004715|126|maestros"][11], 489)
+        self.assertIsNone(start_rows["03000000|206|secundaria"][11])
+        self.assertEqual(course_rows[("03004715|126|maestros", "inicio")][11], 489)
+        self.assertIsNone(course_rows[("03011111|126|maestros", "curso")][11])
 
 
 if __name__ == "__main__":
