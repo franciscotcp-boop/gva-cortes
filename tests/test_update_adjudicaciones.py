@@ -431,6 +431,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertEqual(row.center_code, "12000251")
         self.assertEqual(row.specialty_code, "219")
         self.assertEqual(row.specialty_name, "TECNOLOGIA")
+        self.assertEqual(row.candidate_name, "GOMEZ NEBOT, HECTOR")
 
     def test_maestros_keeps_assignment_specialty(self) -> None:
         block = [
@@ -453,6 +454,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         row = updater.parse_block(block, "maestros")
         self.assertIsNotNone(row)
         self.assertTrue(row.english_requirement)
+        self.assertEqual(row.candidate_name, "FERRER MARGAIX, SUSANA")
 
     def test_maestros_without_ing_is_not_marked(self) -> None:
         block = [
