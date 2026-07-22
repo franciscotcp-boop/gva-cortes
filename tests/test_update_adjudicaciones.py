@@ -432,6 +432,21 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertEqual(row.specialty_code, "219")
         self.assertEqual(row.specialty_name, "TECNOLOGIA")
         self.assertEqual(row.candidate_name, "GOMEZ NEBOT, HECTOR")
+        self.assertEqual(row.workload, "C")
+        self.assertFalse(row.itinerant)
+
+    def test_workload_and_itinerancy_are_read_from_the_awarded_block(self) -> None:
+        block = [
+            "72 RODENAS BRAVO, ELENA Peticion: 1 Voluntaria",
+            "920377 VILLENA(03009154)CEIP SANTA TERESA",
+            "128 / EDUCACIO PRIMARIA",
+            "23 horas Itinerante VACANT Adjudicat",
+        ]
+        row = updater.parse_block(block, "maestros")
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row.workload, 23)
+        self.assertTrue(row.itinerant)
 
     def test_maestros_keeps_assignment_specialty(self) -> None:
         block = [
@@ -455,6 +470,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertIsNotNone(row)
         self.assertTrue(row.english_requirement)
         self.assertEqual(row.candidate_name, "FERRER MARGAIX, SUSANA")
+        self.assertEqual(row.workload, 23)
 
     def test_maestros_without_ing_is_not_marked(self) -> None:
         block = [
@@ -479,21 +495,32 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertFalse(row.english_requirement)
 
 
-class EnglishRequirementSchemaTests(unittest.TestCase):
+class CutSchemaTests(unittest.TestCase):
     def test_legacy_stored_row_is_extended_without_changing_old_fields(self) -> None:
         old = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", "inicio"]
         new = updater.row_with_origin(old, "inicio")
 
         self.assertEqual(new[:9], old)
         self.assertEqual(new[9], False)
-        self.assertEqual(len(new), 10)
+        self.assertEqual(new[10], False)
+        self.assertEqual(len(new), 11)
 
     def test_new_parsed_row_keeps_true_flag_after_origin_is_added(self) -> None:
         parsed = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", True]
         stored = updater.row_with_origin(parsed, "curso")
 
         self.assertEqual(stored[:8], parsed[:8])
-        self.assertEqual(stored[8:], ["curso", True])
+        self.assertEqual(stored[8:], ["curso", True, False])
+
+    def test_new_parsed_row_keeps_english_and_itinerant_flags_independently(self) -> None:
+        parsed = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", True, False]
+        stored = updater.row_with_origin(parsed, "inicio")
+
+        self.assertEqual(stored[8:], ["inicio", True, False])
+
+        parsed[8:] = [False, True]
+        stored = updater.row_with_origin(parsed, "curso")
+        self.assertEqual(stored[8:], ["curso", False, True])
 
     def test_schema_upgrade_is_idempotent(self) -> None:
         legacy = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", "inicio"]
@@ -504,9 +531,10 @@ class EnglishRequirementSchemaTests(unittest.TestCase):
         }
 
         self.assertTrue(updater.ensure_cut_schema(data))
-        self.assertEqual(data["schema_version"], 4)
-        self.assertEqual(data["cut_format"][-1], "requisitoIngles")
+        self.assertEqual(data["schema_version"], 5)
+        self.assertEqual(data["cut_format"][-2:], ["requisitoIngles", "itinerante"])
         self.assertEqual(data["cuts"]["inicio"]["rows"][0][9], False)
+        self.assertEqual(data["cuts"]["inicio"]["rows"][0][10], False)
         self.assertFalse(updater.ensure_cut_schema(data))
 
 

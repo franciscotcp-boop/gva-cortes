@@ -18,14 +18,32 @@ def position(code: str, initial: int, after: int, context: list | None = None) -
     return [code, initial, initial, after, after, None, None, context or [0, 0, 0, None, None]]
 
 
-def assignment(name: str, code: str, center: str, cut: int, body: str = "secundaria") -> SimpleNamespace:
+def assignment(
+    name: str,
+    code: str,
+    center: str,
+    cut: int,
+    body: str = "secundaria",
+    *,
+    placement_type: str = "vacante",
+    workload: int | str = "C",
+    english_requirement: bool = False,
+    itinerant: bool = False,
+    center_name: str = "Centro de prueba",
+    locality: str = "Localidad de prueba",
+) -> SimpleNamespace:
     return SimpleNamespace(
         candidate_name=name,
         specialty_code=code,
         center_code=center,
         cut=cut,
         body=body,
-        placement_type="vacante",
+        placement_type=placement_type,
+        workload=workload,
+        english_requirement=english_requirement,
+        itinerant=itinerant,
+        center_name=center_name,
+        locality=locality,
     )
 
 
@@ -145,6 +163,132 @@ class PositionContextTests(unittest.TestCase):
 
         data = self.load_positions()
         self.assertEqual(data["people"][1][2][0][7][:3], [0, 1, 0])
+
+    def test_award_details_are_published_and_a_continuous_award_replaces_them(self) -> None:
+        updater = PositionContextUpdater(self.positions_path, self.state_path)
+        updater.apply(
+            [
+                parsed(
+                    "2026-07-15",
+                    "secundaria",
+                    [
+                        assignment(
+                            "VIZCAINO SANCHIS, GEMMA",
+                            "3A1",
+                            "03010442",
+                            4,
+                            workload="C",
+                            itinerant=True,
+                            center_name="CIPFP Canastell",
+                            locality="Sant Vicent del Raspeig",
+                        )
+                    ],
+                )
+            ],
+            "inicio",
+        )
+        updater.save()
+
+        data = self.load_positions()
+        gemma = data["people"][0][2][0]
+        self.assertEqual(gemma[8], "A")
+        self.assertEqual(
+            gemma[9],
+            [
+                "I",
+                "2026-07-15",
+                "vacante",
+                "C",
+                "03010442",
+                False,
+                True,
+                "CIPFP Canastell",
+                "Sant Vicent del Raspeig",
+            ],
+        )
+
+        updater = PositionContextUpdater(self.positions_path, self.state_path)
+        updater.apply(
+            [
+                parsed(
+                    "2026-09-08",
+                    "secundaria",
+                    [
+                        assignment(
+                            "VIZCAINO SANCHIS, GEMMA",
+                            "3A1",
+                            "46000001",
+                            1,
+                            placement_type="sub_indeterminada",
+                            workload=18,
+                            center_name="IES de prueba",
+                            locality="Valencia",
+                        )
+                    ],
+                    "continuous",
+                )
+            ],
+            "curso",
+        )
+        updater.save()
+
+        detail = self.load_positions()["people"][0][2][0][9]
+        self.assertEqual(detail[:5], ["C", "2026-09-08", "sub_indeterminada", 18, "46000001"])
+        self.assertEqual(detail[7:], ["IES de prueba", "Valencia"])
+
+    def test_legacy_province_state_is_migrated_without_losing_rows(self) -> None:
+        legacy_fields = [
+            "body",
+            "specialty_code",
+            "person_index",
+            "position_index",
+            "after_order",
+            "initial_order",
+            "center_code",
+            "province_index",
+            "published_date",
+            "mode",
+            "placement_type",
+            "candidate_name",
+            "source_url",
+            "source_sha256",
+        ]
+        legacy_row = [
+            "secundaria",
+            "3A1",
+            0,
+            0,
+            4,
+            6,
+            "03010442",
+            0,
+            "2026-07-15",
+            "inicio",
+            "vacante",
+            "VIZCAINO SANCHIS, GEMMA",
+            "https://example.test/start.pdf",
+            "sha-start",
+        ]
+        self.state_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "academic_year": "2026-2027",
+                    "assignment_fields": legacy_fields,
+                    "assignments": [legacy_row],
+                    "sources": [],
+                    "skipped": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        updater = PositionContextUpdater(self.positions_path, self.state_path)
+
+        self.assertTrue(updater.enabled)
+        self.assertEqual(updater.state["schema_version"], 2)
+        self.assertEqual(updater.state["assignments"][0][:14], legacy_row)
+        self.assertEqual(updater.state["assignments"][0][14:], [None, None, None, None, None])
 
 
 if __name__ == "__main__":
