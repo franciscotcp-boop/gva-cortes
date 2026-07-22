@@ -17,7 +17,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -88,7 +88,7 @@ CUT_FORMAT = [
     "itinerante",
 ]
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SECONDARY_MATCH_POLICY_VERSION = 5
 CUT_POLICY = {
     "version": 7,
@@ -115,6 +115,12 @@ MAESTRO_SPECIALTY_CODES = frozenset({
     "153",
 })
 
+VACANCY_TOTALS_POLICY = {
+    "version": 1,
+    "inicio": "Se sustituye por el recuento completo de los PDF mas recientes de inicio de curso de cada cuerpo.",
+    "curso": "Se acumulan unicamente las vacantes de cada PDF de adjudicacion continua desde la primera adjudicacion del curso, sin contar dos veces el mismo PDF.",
+}
+
 DEFAULT_DATA = {
     "schema_version": SCHEMA_VERSION,
     "generated_at": None,
@@ -127,6 +133,14 @@ DEFAULT_DATA = {
     "center_format": CENTER_FORMAT,
     "cut_format": CUT_FORMAT,
     "cut_policy": CUT_POLICY,
+    "vacancy_totals_policy": VACANCY_TOTALS_POLICY,
+    "vacancy_totals": {
+        "schema_version": 1,
+        "definition_es": "Numero de adjudicaciones con tipo de plaza vacante por especialidad. Excluye sustituciones determinadas e indeterminadas e incluye cualquier jornada e itinerancia.",
+        "definition_va": "Nombre d'adjudicacions amb tipus de placa vacant per especialitat. Exclou substitucions determinades i indeterminades i inclou qualsevol jornada i itinerancia.",
+        "inicio": None,
+        "curso": None,
+    },
     "centers": [],
     "cuts": {
         "inicio": {
@@ -354,13 +368,15 @@ def load_data() -> dict:
     data.setdefault("cuts", {}).setdefault("inicio", DEFAULT_DATA["cuts"]["inicio"].copy())
     data.setdefault("cuts", {}).setdefault("curso", DEFAULT_DATA["cuts"]["curso"].copy())
     data.setdefault("processed_pdfs", {})
+    data.setdefault("vacancy_totals_policy", VACANCY_TOTALS_POLICY)
+    data.setdefault("vacancy_totals", json.loads(json.dumps(DEFAULT_DATA["vacancy_totals"])))
     return data
 
 
 def save_data(data: dict) -> None:
     data["generated_at"] = now_local().isoformat(timespec="seconds")
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    DATA_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    DATA_PATH.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=False) + "\n", encoding="utf-8")
 
 
 def is_start_window(dt: datetime) -> bool:
@@ -1053,6 +1069,187 @@ def migrate_secondary_header_policy(data: dict, centers_by_code: dict[str, dict[
     return True
 
 
+def assignment_belongs_to_pdf_body(assignment: Adjudication, body: str) -> bool:
+    is_master_specialty = str(assignment.specialty_code) in MAESTRO_SPECIALTY_CODES
+    return is_master_specialty if body == "maestros" else not is_master_specialty
+
+
+def vacancy_counts_for_pdf(parsed: ParsedPdf) -> tuple[Counter[str], int, int]:
+    all_vacancies = [
+        assignment
+        for assignment in parsed.assignments
+        if assignment.placement_type == "vacante"
+    ]
+    owned_vacancies = [
+        assignment
+        for assignment in all_vacancies
+        if assignment_belongs_to_pdf_body(assignment, parsed.body)
+    ]
+    counts = Counter(str(assignment.specialty_code) for assignment in owned_vacancies)
+    return counts, len(all_vacancies), len(owned_vacancies)
+
+
+def ordered_counts(counts: Counter[str] | dict[str, int]) -> dict[str, int]:
+    return {str(code): int(counts[code]) for code in sorted(counts)}
+
+
+def vacancy_document_summary(parsed: ParsedPdf) -> dict:
+    counts, pdf_vacancy_total, owned_total = vacancy_counts_for_pdf(parsed)
+    return {
+        "url": parsed.url,
+        "pdf_sha256": parsed.sha256,
+        "body": parsed.body,
+        "published_date": parsed.published_date,
+        "source_records": len(parsed.assignments),
+        "pdf_vacancy_total": pdf_vacancy_total,
+        "excluded_other_body_vacancies": pdf_vacancy_total - owned_total,
+        "total": owned_total,
+        "counts": ordered_counts(counts),
+    }
+
+
+def aggregate_vacancy_documents(documents: list[dict]) -> tuple[dict[str, int], dict[str, dict], int]:
+    total_counts: Counter[str] = Counter()
+    body_counts: dict[str, Counter[str]] = {
+        "maestros": Counter(),
+        "secundaria": Counter(),
+    }
+    body_totals = {"maestros": 0, "secundaria": 0}
+    for document in documents:
+        body = str(document.get("body") or "")
+        counts = Counter({str(code): int(value) for code, value in (document.get("counts") or {}).items()})
+        total_counts.update(counts)
+        if body in body_counts:
+            body_counts[body].update(counts)
+            body_totals[body] += sum(counts.values())
+    bodies = {
+        body: {
+            "total": body_totals[body],
+            "counts": ordered_counts(body_counts[body]),
+        }
+        for body in ("maestros", "secundaria")
+        if body_totals[body] or body_counts[body]
+    }
+    return ordered_counts(total_counts), bodies, sum(total_counts.values())
+
+
+def apply_vacancy_totals_inicio(data: dict, parsed_items: list[ParsedPdf]) -> bool:
+    if not parsed_items:
+        return False
+    latest_by_body: dict[str, ParsedPdf] = {}
+    for parsed in parsed_items:
+        old = latest_by_body.get(parsed.body)
+        if old is None or (parsed.published_date or "") >= (old.published_date or ""):
+            latest_by_body[parsed.body] = parsed
+
+    newest = max(latest_by_body.values(), key=lambda item: item.published_date or "")
+    school_year = school_year_for_date(newest.published_date, now_local())
+    vacancy_totals = data.setdefault("vacancy_totals", json.loads(json.dumps(DEFAULT_DATA["vacancy_totals"])))
+    current = vacancy_totals.get("inicio")
+    if not isinstance(current, dict) or current.get("school_year") != school_year:
+        current = {
+            "school_year": school_year,
+            "start_year": start_year_from_school_year(school_year),
+            "updated_at": None,
+            "total": 0,
+            "counts": {},
+            "bodies": {},
+        }
+        vacancy_totals["inicio"] = current
+        vacancy_totals["curso"] = None
+
+    bodies = current.setdefault("bodies", {})
+    for body, parsed in latest_by_body.items():
+        document = vacancy_document_summary(parsed)
+        bodies[body] = {
+            key: value
+            for key, value in document.items()
+            if key not in {"url", "body"}
+        }
+
+    body_documents = [
+        {"body": body, **summary}
+        for body, summary in bodies.items()
+        if isinstance(summary, dict)
+    ]
+    counts, aggregated_bodies, total = aggregate_vacancy_documents(body_documents)
+    for body, summary in aggregated_bodies.items():
+        if body in bodies:
+            summary.update({
+                key: value
+                for key, value in bodies[body].items()
+                if key not in {"counts", "total"}
+            })
+            aggregated_bodies[body] = summary
+    dates = [
+        str(summary.get("published_date") or "")
+        for summary in bodies.values()
+        if isinstance(summary, dict) and summary.get("published_date")
+    ]
+    current.update({
+        "school_year": school_year,
+        "start_year": start_year_from_school_year(school_year),
+        "updated_at": max(dates) if dates else None,
+        "total": total,
+        "counts": counts,
+        "bodies": aggregated_bodies,
+    })
+    return True
+
+
+def apply_vacancy_totals_curso(data: dict, parsed_items: list[ParsedPdf]) -> bool:
+    if not parsed_items:
+        return False
+    newest = max(parsed_items, key=lambda item: item.published_date or "")
+    school_year = school_year_for_date(newest.published_date, now_local())
+    vacancy_totals = data.setdefault("vacancy_totals", json.loads(json.dumps(DEFAULT_DATA["vacancy_totals"])))
+    current = vacancy_totals.get("curso")
+    if not isinstance(current, dict) or current.get("school_year") != school_year:
+        current = {
+            "school_year": school_year,
+            "first_date": None,
+            "updated_at": None,
+            "total": 0,
+            "counts": {},
+            "bodies": {},
+            "documents": {},
+        }
+        vacancy_totals["curso"] = current
+
+    documents = current.setdefault("documents", {})
+    changed = False
+    for parsed in parsed_items:
+        if any(
+            item.get("pdf_sha256") == parsed.sha256 and url != parsed.url
+            for url, item in documents.items()
+        ):
+            continue
+        document = vacancy_document_summary(parsed)
+        if documents.get(parsed.url) != document:
+            documents[parsed.url] = document
+            changed = True
+
+    if not changed:
+        return False
+    document_list = [item for item in documents.values() if isinstance(item, dict)]
+    counts, bodies, total = aggregate_vacancy_documents(document_list)
+    dates = sorted(
+        str(item.get("published_date"))
+        for item in document_list
+        if item.get("published_date")
+    )
+    current.update({
+        "school_year": school_year,
+        "first_date": dates[0] if dates else None,
+        "updated_at": dates[-1] if dates else None,
+        "total": total,
+        "counts": counts,
+        "bodies": bodies,
+        "documents": documents,
+    })
+    return True
+
+
 def apply_inicio(data: dict, parsed_items: list[ParsedPdf]) -> bool:
     changed = False
     latest_by_body: dict[str, ParsedPdf] = {}
@@ -1189,8 +1386,10 @@ def run_mode(
             print(f"WARNING: no se pudo procesar {link['url']}: {exc}", file=sys.stderr)
     if mode == "inicio":
         result = apply_inicio(data, parsed_items) or changed
+        result = apply_vacancy_totals_inicio(data, parsed_items) or result
     else:
         result = apply_curso(data, parsed_items) or changed
+        result = apply_vacancy_totals_curso(data, parsed_items) or result
     if position_context is not None and parsed_items:
         position_context.apply(parsed_items, mode)
     return result
@@ -1246,7 +1445,10 @@ def main() -> int:
     policy_changed = data.get("cut_policy") != CUT_POLICY
     if policy_changed:
         data["cut_policy"] = CUT_POLICY
-    changed = changed or policy_changed
+    vacancy_policy_changed = data.get("vacancy_totals_policy") != VACANCY_TOTALS_POLICY
+    if vacancy_policy_changed:
+        data["vacancy_totals_policy"] = VACANCY_TOTALS_POLICY
+    changed = changed or policy_changed or vacancy_policy_changed
     for mode in modes:
         changed = run_mode(
             data,
