@@ -18,18 +18,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pdfplumber
 
+from position_context import PositionContextUpdater
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "adjudicaciones.json"
 CENTER_OVERRIDES_PATH = ROOT / "data" / "center_overrides.json"
 CENTER_WEB_OVERRIDES_PATH = ROOT / "data" / "center_web_overrides.json"
+POSITIONS_PATH = ROOT / "data" / "posiciones_bolsa.json"
+POSITION_CONTEXT_STATE_PATH = ROOT / "data" / "position_context_state.json"
 TZ = ZoneInfo("Europe/Madrid")
 
 START_PAGE_URL = "https://ceice.gva.es/es/web/rrhh-educacion/adjudicacion3"
@@ -173,6 +177,7 @@ class LinkParser(html.parser.HTMLParser):
 @dataclass
 class Adjudication:
     cut: int
+    candidate_name: str
     center_code: str
     specialty_code: str
     specialty_name: str
@@ -190,6 +195,7 @@ class ParsedPdf:
     body: str
     published_date: str | None
     rows: list[list]
+    assignments: list[Adjudication] = field(default_factory=list)
 
 
 def now_local() -> datetime:
@@ -686,6 +692,17 @@ def detect_english_requirement(block: list[str], body: str) -> bool:
     return bool(re.search(r"(?:^|\s)/\s*ing\.?(?=\s|\d|$)", normalized))
 
 
+def candidate_name_from_line(line: str, match_cut: re.Match[str]) -> str:
+    value = clean(line[match_cut.end() :])
+    value = re.split(
+        r"(?:Petici.n\s*:|Voluntaria\b|Obligat.ria\b|PREFER.NCIA\b)",
+        value,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    return clean(value)
+
+
 def parse_block(
     block: list[str],
     body: str,
@@ -719,6 +736,7 @@ def parse_block(
         return None
     return Adjudication(
         cut=int(match_cut.group(1)),
+        candidate_name=candidate_name_from_line(block[0], match_cut),
         center_code=center_match.group(2),
         specialty_code=specialty_code,
         specialty_name=specialty_name,
@@ -772,10 +790,9 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
                     flush=True,
                 )
 
+    valid_rows = [row for row in rows if owning_body_for_specialty(row.specialty_code) == body]
     best: OrderedDict[tuple[str, str], Adjudication] = OrderedDict()
-    for row in rows:
-        if owning_body_for_specialty(row.specialty_code) != body:
-            continue
+    for row in valid_rows:
         key = (row.center_code, row.specialty_code)
         old = best.get(key)
         if old is None or row.cut > old.cut:
@@ -796,7 +813,23 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
             row.english_requirement,
         ])
 
-    return ParsedPdf(url=url, sha256=sha, body=body, published_date=published_date, rows=output)
+    assignments: list[Adjudication] = []
+    seen_assignments: set[tuple[str, str, int, str]] = set()
+    for row in valid_rows:
+        key = (norm(row.candidate_name), row.specialty_code, row.cut, row.center_code)
+        if key in seen_assignments:
+            continue
+        seen_assignments.add(key)
+        assignments.append(row)
+
+    return ParsedPdf(
+        url=url,
+        sha256=sha,
+        body=body,
+        published_date=published_date,
+        rows=output,
+        assignments=assignments,
+    )
 
 
 def pdf_already_processed(data: dict, parsed: ParsedPdf) -> bool:
@@ -1085,7 +1118,13 @@ def link_points_outside_target_year(link: dict[str, str], target_school_year: st
     return False
 
 
-def run_mode(data: dict, mode: str, centers_by_code: dict[str, dict[str, str]], target_school_year: str | None) -> bool:
+def run_mode(
+    data: dict,
+    mode: str,
+    centers_by_code: dict[str, dict[str, str]],
+    target_school_year: str | None,
+    position_context: PositionContextUpdater | None = None,
+) -> bool:
     page_url = START_PAGE_URL if mode == "inicio" else COURSE_PAGE_URL
     links = extract_pdf_links(page_url)
     print(f"{mode}: encontrados {len(links)} enlaces PDF")
@@ -1121,14 +1160,29 @@ def run_mode(data: dict, mode: str, centers_by_code: dict[str, dict[str, str]], 
         except Exception as exc:
             print(f"WARNING: no se pudo procesar {link['url']}: {exc}", file=sys.stderr)
     if mode == "inicio":
-        return apply_inicio(data, parsed_items) or changed
-    return apply_curso(data, parsed_items) or changed
+        result = apply_inicio(data, parsed_items) or changed
+    else:
+        result = apply_curso(data, parsed_items) or changed
+    if position_context is not None and parsed_items:
+        position_context.apply(parsed_items, mode)
+    return result
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", choices=["inicio", "curso", "all"], help="Ejecuta una comprobacion aunque no toque por calendario.")
     parser.add_argument("--data", default=str(DATA_PATH), help="Ruta del JSON de datos.")
+    parser.add_argument("--positions", default=str(POSITIONS_PATH), help="Ruta del JSON de posiciones.")
+    parser.add_argument(
+        "--position-context-state",
+        default=str(POSITION_CONTEXT_STATE_PATH),
+        help="Ruta del estado acumulativo usado para la informacion provincial.",
+    )
+    parser.add_argument(
+        "--skip-position-context",
+        action="store_true",
+        help="Actualiza solo los cortes y omite la informacion provincial.",
+    )
     parser.add_argument("--school-year", help="Curso escolar objetivo, por ejemplo 2025-2026. Por defecto usa el curso activo en Europe/Madrid.")
     parser.add_argument("--include-old", action="store_true", help="Permite procesar PDFs de otros cursos. Usar solo para reconstrucciones controladas.")
     return parser.parse_args()
@@ -1152,6 +1206,12 @@ def main() -> int:
 
     data = load_data()
     data["centers"], centers_by_code = load_centers(data.get("centers", []))
+    position_context = None
+    if not args.skip_position_context:
+        position_context = PositionContextUpdater(
+            Path(args.positions),
+            Path(args.position_context_state),
+        )
     target_school_year = None if args.include_old else (args.school_year or school_year_for_date(None, dt))
     changed = migrate_secondary_header_policy(data, centers_by_code)
     changed = ensure_cut_schema(data) or changed
@@ -1160,11 +1220,20 @@ def main() -> int:
         data["cut_policy"] = CUT_POLICY
     changed = changed or policy_changed
     for mode in modes:
-        changed = run_mode(data, mode, centers_by_code, target_school_year) or changed
+        changed = run_mode(
+            data,
+            mode,
+            centers_by_code,
+            target_school_year,
+            position_context,
+        ) or changed
     changed = ensure_period_metadata(data) or changed
 
     save_data(data)
+    position_context_changed = bool(position_context and position_context.save())
     print("JSON actualizado" if changed else "Sin cambios de adjudicaciones")
+    if position_context_changed:
+        print("Informacion provincial de posiciones actualizada")
     return 0
 
 
