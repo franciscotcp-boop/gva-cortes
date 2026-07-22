@@ -24,7 +24,7 @@ MASTER_SPECIALTY_CODES = frozenset({
 })
 PROVINCE_INDEX = {"03": 0, "46": 1, "12": 2}
 PROVINCES = ("alicante", "valencia", "castellon")
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 ASSIGNMENT_FIELDS = [
     "body",
     "specialty_code",
@@ -40,6 +40,11 @@ ASSIGNMENT_FIELDS = [
     "candidate_name",
     "source_url",
     "source_sha256",
+    "workload",
+    "english_requirement",
+    "itinerant",
+    "center_name",
+    "locality",
 ]
 
 
@@ -116,6 +121,29 @@ def empty_state(academic_year: str) -> dict:
     }
 
 
+def migrate_state_format(state: dict) -> dict | None:
+    fields = state.get("assignment_fields")
+    rows = state.get("assignments")
+    if not isinstance(fields, list) or not isinstance(rows, list):
+        return None
+    if fields == ASSIGNMENT_FIELDS:
+        state["schema_version"] = STATE_SCHEMA_VERSION
+        return state
+    required = set(ASSIGNMENT_FIELDS[:13])
+    if not required.issubset(set(fields)):
+        return None
+    migrated = []
+    for raw in rows:
+        if not isinstance(raw, list) or len(raw) != len(fields):
+            continue
+        item = dict(zip(fields, raw))
+        migrated.append([item.get(field) for field in ASSIGNMENT_FIELDS])
+    state["assignment_fields"] = list(ASSIGNMENT_FIELDS)
+    state["assignments"] = migrated
+    state["schema_version"] = STATE_SCHEMA_VERSION
+    return state
+
+
 class PositionContextUpdater:
     """Maintain province counters without changing the cut database."""
 
@@ -145,10 +173,12 @@ class PositionContextUpdater:
             self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
         else:
             self.state = empty_state(positions_year)
-        if self.state.get("assignment_fields") != ASSIGNMENT_FIELDS:
+        migrated_state = migrate_state_format(self.state)
+        if migrated_state is None:
             print("Posiciones: omitido; el estado provincial tiene un formato incompatible")
             self.enabled = False
             return
+        self.state = migrated_state
         if normalized_academic_year(self.state.get("academic_year")) != positions_year:
             print("Posiciones: estado de otro curso; se esperara al PDF de inicio correspondiente")
 
@@ -296,6 +326,11 @@ class PositionContextUpdater:
                 "candidate_name": candidate,
                 "source_url": str(getattr(parsed, "url", "") or ""),
                 "source_sha256": str(getattr(parsed, "sha256", "") or ""),
+                "workload": getattr(assignment, "workload", None),
+                "english_requirement": getattr(assignment, "english_requirement", False) is True,
+                "itinerant": getattr(assignment, "itinerant", False) is True,
+                "center_name": str(getattr(assignment, "center_name", "") or ""),
+                "locality": str(getattr(assignment, "locality", "") or ""),
             })
         return resolved, dict(skipped)
 
@@ -303,6 +338,7 @@ class PositionContextUpdater:
         if not self.enabled:
             return False
         changed = False
+        reset_bodies: set[str] = set()
         positions_year = normalized_academic_year(self.positions.get("academic_year"))
         for parsed in sorted(
             parsed_items,
@@ -329,6 +365,7 @@ class PositionContextUpdater:
             body = str(getattr(parsed, "body", "") or "")
             if mode == "inicio":
                 existing = [row for row in existing if row["body"] != body]
+                reset_bodies.add(body)
 
             def assignment_key(row: dict) -> tuple:
                 person_index = int(row["person_index"])
@@ -406,8 +443,60 @@ class PositionContextUpdater:
 
         if changed:
             self._recalculate()
+            self._sync_adjudication_details(reset_bodies)
             self.dirty = True
         return changed
+
+    def _sync_adjudication_details(self, reset_bodies: set[str]) -> None:
+        for ref in self.profile_refs:
+            if ref["body"] not in reset_bodies:
+                continue
+            position = self.positions["people"][ref["person_index"]][2][ref["position_index"]]
+            while len(position) < 10:
+                position.append(None)
+            if position[8] == "A":
+                position[8] = "N"
+            position[9] = None
+
+        for row in self._rows_as_dicts():
+            person_index = int(row.get("person_index", -1))
+            position_index = int(row.get("position_index", -1))
+            workload = row.get("workload")
+            if person_index < 0 or position_index < 0 or workload is None:
+                continue
+            position = self.positions["people"][person_index][2][position_index]
+            while len(position) < 10:
+                position.append(None)
+            position[8] = "A"
+            position[9] = [
+                "C" if row.get("mode") == "curso" else "I",
+                str(row.get("published_date") or ""),
+                str(row.get("placement_type") or ""),
+                workload,
+                str(row.get("center_code") or ""),
+                row.get("english_requirement") is True,
+                row.get("itinerant") is True,
+                str(row.get("center_name") or ""),
+                str(row.get("locality") or ""),
+            ]
+
+        self.positions["schema_version"] = max(9, int(self.positions.get("schema_version") or 0))
+        details = self.positions.setdefault("adjudication_details", {})
+        details["version"] = max(1, int(details.get("version") or 0))
+        details["position_index"] = 9
+        details["fields"] = [
+            "stage",
+            "date",
+            "placement_type",
+            "workload",
+            "center_code",
+            "english_requirement",
+            "itinerant",
+            "center_name",
+            "municipality",
+        ]
+        details["workload_full_time_code"] = "C"
+        details["continuous_policy"] = "La adjudicacion mas reciente de la misma persona y especialidad sustituye el detalle anterior."
 
     def _recalculate(self) -> None:
         events_by_code: dict[str, list[dict]] = defaultdict(list)
