@@ -495,6 +495,165 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertFalse(row.english_requirement)
 
 
+class VacancyTotalsTests(unittest.TestCase):
+    @staticmethod
+    def assignment(code: str, placement_type: str, body: str, cut: int = 1) -> updater.Adjudication:
+        return updater.Adjudication(
+            cut=cut,
+            candidate_name=f"DOCENTE {body} {code} {cut}",
+            center_code=f"C{cut}",
+            specialty_code=code,
+            specialty_name=f"ESPECIALIDAD {code}",
+            center_name="CENTRO",
+            locality="LOCALIDAD",
+            body=body,
+            placement_type=placement_type,
+            english_requirement=False,
+            workload=12,
+            itinerant=True,
+        )
+
+    @classmethod
+    def parsed(
+        cls,
+        url: str,
+        sha: str,
+        body: str,
+        date: str,
+        assignments: list[updater.Adjudication],
+    ) -> updater.ParsedPdf:
+        return updater.ParsedPdf(url, sha, body, date, [], assignments)
+
+    def test_inicio_counts_only_vacancies_owned_by_each_body(self) -> None:
+        data = json.loads(json.dumps(updater.DEFAULT_DATA))
+        masters = self.parsed(
+            "https://example.test/inicio-maestros.pdf",
+            "sha-maestros",
+            "maestros",
+            "2026-07-15",
+            [
+                self.assignment("128", "vacante", "maestros", 1),
+                self.assignment("128", "sub_indeterminada", "maestros", 2),
+                self.assignment("205", "vacante", "maestros", 3),
+            ],
+        )
+        secondary = self.parsed(
+            "https://example.test/inicio-secundaria.pdf",
+            "sha-secundaria",
+            "secundaria",
+            "2026-07-15",
+            [
+                self.assignment("206", "vacante", "secundaria", 1),
+                self.assignment("206", "sub_determinada", "secundaria", 2),
+                self.assignment("128", "vacante", "secundaria", 3),
+            ],
+        )
+
+        self.assertTrue(updater.apply_vacancy_totals_inicio(data, [masters, secondary]))
+        summary = data["vacancy_totals"]["inicio"]
+        self.assertEqual(summary["school_year"], "2026-2027")
+        self.assertEqual(summary["start_year"], 2026)
+        self.assertEqual(summary["counts"], {"128": 1, "206": 1})
+        self.assertEqual(summary["total"], 2)
+        self.assertEqual(summary["bodies"]["maestros"]["pdf_vacancy_total"], 2)
+        self.assertEqual(summary["bodies"]["maestros"]["excluded_other_body_vacancies"], 1)
+        self.assertEqual(summary["bodies"]["secundaria"]["excluded_other_body_vacancies"], 1)
+        self.assertIsNone(data["vacancy_totals"]["curso"])
+
+    def test_inicio_correction_replaces_one_body_and_new_course_resets(self) -> None:
+        data = json.loads(json.dumps(updater.DEFAULT_DATA))
+        first_master = self.parsed(
+            "https://example.test/master.pdf",
+            "master-1",
+            "maestros",
+            "2026-07-15",
+            [self.assignment("128", "vacante", "maestros", 1)],
+        )
+        secondary = self.parsed(
+            "https://example.test/secondary.pdf",
+            "secondary-1",
+            "secundaria",
+            "2026-07-15",
+            [self.assignment("206", "vacante", "secundaria", 1)],
+        )
+        updater.apply_vacancy_totals_inicio(data, [first_master, secondary])
+
+        corrected_master = self.parsed(
+            "https://example.test/master-corrected.pdf",
+            "master-2",
+            "maestros",
+            "2026-07-16",
+            [
+                self.assignment("128", "vacante", "maestros", 1),
+                self.assignment("128", "vacante", "maestros", 2),
+            ],
+        )
+        updater.apply_vacancy_totals_inicio(data, [corrected_master])
+        self.assertEqual(data["vacancy_totals"]["inicio"]["counts"], {"128": 2, "206": 1})
+
+        next_course = self.parsed(
+            "https://example.test/master-2027.pdf",
+            "master-2027",
+            "maestros",
+            "2027-07-15",
+            [self.assignment("128", "vacante", "maestros", 1)],
+        )
+        updater.apply_vacancy_totals_inicio(data, [next_course])
+        self.assertEqual(data["vacancy_totals"]["inicio"]["school_year"], "2027-2028")
+        self.assertEqual(data["vacancy_totals"]["inicio"]["counts"], {"128": 1})
+        self.assertIsNone(data["vacancy_totals"]["curso"])
+
+    def test_curso_accumulates_documents_and_replaces_a_corrected_url(self) -> None:
+        data = json.loads(json.dumps(updater.DEFAULT_DATA))
+        first = self.parsed(
+            "https://example.test/curso-maestros.pdf",
+            "curso-master-1",
+            "maestros",
+            "2026-09-08",
+            [
+                self.assignment("128", "vacante", "maestros", 1),
+                self.assignment("128", "sub_indeterminada", "maestros", 2),
+            ],
+        )
+        secondary = self.parsed(
+            "https://example.test/curso-secundaria.pdf",
+            "curso-secondary-1",
+            "secundaria",
+            "2026-09-08",
+            [self.assignment("206", "vacante", "secundaria", 1)],
+        )
+        self.assertTrue(updater.apply_vacancy_totals_curso(data, [first, secondary]))
+        summary = data["vacancy_totals"]["curso"]
+        self.assertEqual(summary["first_date"], "2026-09-08")
+        self.assertEqual(summary["counts"], {"128": 1, "206": 1})
+        self.assertEqual(summary["total"], 2)
+        self.assertFalse(updater.apply_vacancy_totals_curso(data, [first, secondary]))
+
+        corrected = self.parsed(
+            "https://example.test/curso-maestros.pdf",
+            "curso-master-2",
+            "maestros",
+            "2026-09-08",
+            [
+                self.assignment("128", "vacante", "maestros", 1),
+                self.assignment("128", "vacante", "maestros", 2),
+            ],
+        )
+        later = self.parsed(
+            "https://example.test/curso-maestros-2.pdf",
+            "curso-master-3",
+            "maestros",
+            "2026-09-10",
+            [self.assignment("123", "vacante", "maestros", 1)],
+        )
+        self.assertTrue(updater.apply_vacancy_totals_curso(data, [corrected, later]))
+        summary = data["vacancy_totals"]["curso"]
+        self.assertEqual(summary["first_date"], "2026-09-08")
+        self.assertEqual(summary["updated_at"], "2026-09-10")
+        self.assertEqual(summary["counts"], {"123": 1, "128": 2, "206": 1})
+        self.assertEqual(summary["total"], 4)
+
+
 class CutSchemaTests(unittest.TestCase):
     def test_legacy_stored_row_is_extended_without_changing_old_fields(self) -> None:
         old = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", "inicio"]
@@ -531,7 +690,7 @@ class CutSchemaTests(unittest.TestCase):
         }
 
         self.assertTrue(updater.ensure_cut_schema(data))
-        self.assertEqual(data["schema_version"], 5)
+        self.assertEqual(data["schema_version"], updater.SCHEMA_VERSION)
         self.assertEqual(data["cut_format"][-2:], ["requisitoIngles", "itinerante"])
         self.assertEqual(data["cuts"]["inicio"]["rows"][0][9], False)
         self.assertEqual(data["cuts"]["inicio"]["rows"][0][10], False)
