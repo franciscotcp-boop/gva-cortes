@@ -80,13 +80,15 @@ CUT_FORMAT = [
     "cuerpo",
     "tipoPlaza",
     "origen",
+    "requisitoIngles",
 ]
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+SECONDARY_MATCH_POLICY_VERSION = 5
 CUT_POLICY = {
-    "version": 5,
-    "rule": "En Otros Cuerpos solo computa una adjudicacion cuando la especialidad del encabezado coincide con la especialidad de la plaza adjudicada junto al docente.",
-    "maestros": "Se conserva la especialidad de la plaza adjudicada.",
+    "version": 6,
+    "rule": "En Otros Cuerpos solo computa una adjudicacion cuando la especialidad del encabezado coincide con la especialidad de la plaza adjudicada junto al docente. En Maestros se identifica el requisito de ingles exclusivamente por / ING. en el bloque de la plaza adjudicada.",
+    "maestros": "Se conserva la especialidad de la plaza adjudicada y se marca requisitoIngles solo cuando esa misma adjudicacion contiene / ING.",
     "secundaria_y_otros": "Se exige que el codigo del encabezado y el codigo de la plaza adjudicada sean iguales; las filas de especialidades compatibles distintas no generan corte.",
     "independent_extractors": ["pdfplumber", "pypdf"],
 }
@@ -178,6 +180,7 @@ class Adjudication:
     locality: str
     body: str
     placement_type: str
+    english_requirement: bool
 
 
 @dataclass
@@ -676,6 +679,13 @@ def detect_placement_type(block: list[str]) -> str:
     return ""
 
 
+def detect_english_requirement(block: list[str], body: str) -> bool:
+    if body != "maestros":
+        return False
+    normalized = norm(" ".join(block))
+    return bool(re.search(r"(?:^|\s)/\s*ing\.?(?=\s|\d|$)", normalized))
+
+
 def parse_block(
     block: list[str],
     body: str,
@@ -716,6 +726,7 @@ def parse_block(
         locality=clean(center_match.group(1)),
         body=body,
         placement_type=detect_placement_type(block),
+        english_requirement=detect_english_requirement(block, body),
     )
 
 
@@ -782,6 +793,7 @@ def parse_pdf(url: str, pdf_bytes: bytes, centers_by_code: dict[str, dict[str, s
             center["municipality"] if center else display_place(row.locality),
             row.body,
             row.placement_type,
+            row.english_requirement,
         ])
 
     return ParsedPdf(url=url, sha256=sha, body=body, published_date=published_date, rows=output)
@@ -824,14 +836,20 @@ def row_key(row: list) -> str:
     return f"{row[0]}|{row[1]}|{body}"
 
 
+def row_english_requirement(row: list) -> bool:
+    if len(row) >= 10:
+        return row[9] is True
+    if len(row) >= 9 and isinstance(row[8], bool):
+        return row[8]
+    return False
+
+
 def row_with_origin(row: list, origin: str) -> list:
-    if len(row) >= 9:
-        base = row[:8]
-    elif len(row) >= 8 and row[7] not in {"inicio", "curso"}:
+    if len(row) >= 8 and row[7] not in {"inicio", "curso"}:
         base = row[:8]
     else:
         base = (row[:7] if len(row) >= 7 else row + [""] * (7 - len(row))) + [""]
-    return base + [origin]
+    return base + [origin, row_english_requirement(row)]
 
 
 def row_origin(row: list, default: str) -> str:
@@ -840,6 +858,24 @@ def row_origin(row: list, default: str) -> str:
     if len(row) >= 8 and row[7] in {"inicio", "curso"}:
         return row[7]
     return default
+
+
+def ensure_cut_schema(data: dict) -> bool:
+    changed = False
+    for mode in ("inicio", "curso"):
+        period = data.setdefault("cuts", {}).setdefault(mode, {})
+        rows = period.setdefault("rows", [])
+        normalized = [row_with_origin(row, row_origin(row, "inicio")) for row in rows]
+        if normalized != rows:
+            period["rows"] = normalized
+            changed = True
+    if data.get("schema_version") != SCHEMA_VERSION:
+        data["schema_version"] = SCHEMA_VERSION
+        changed = True
+    if data.get("cut_format") != CUT_FORMAT:
+        data["cut_format"] = CUT_FORMAT
+        changed = True
+    return changed
 
 
 def latest_secondary_course_url(data: dict) -> str | None:
@@ -894,7 +930,7 @@ def update_secondary_metadata(data: dict, parsed: ParsedPdf, mode: str) -> None:
 
 def migrate_secondary_header_policy(data: dict, centers_by_code: dict[str, dict[str, str]]) -> bool:
     current_policy_version = int(data.get("cut_policy", {}).get("version") or 0)
-    if current_policy_version >= CUT_POLICY["version"]:
+    if current_policy_version >= SECONDARY_MATCH_POLICY_VERSION:
         return False
 
     inicio = data.get("cuts", {}).get("inicio", {})
@@ -1118,6 +1154,7 @@ def main() -> int:
     data["centers"], centers_by_code = load_centers(data.get("centers", []))
     target_school_year = None if args.include_old else (args.school_year or school_year_for_date(None, dt))
     changed = migrate_secondary_header_policy(data, centers_by_code)
+    changed = ensure_cut_schema(data) or changed
     policy_changed = data.get("cut_policy") != CUT_POLICY
     if policy_changed:
         data["cut_policy"] = CUT_POLICY

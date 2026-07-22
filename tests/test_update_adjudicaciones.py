@@ -349,8 +349,8 @@ class SecondaryHeaderSpecialtyTests(unittest.TestCase):
             self.assertTrue(updater.migrate_secondary_header_policy(data, {}))
 
         self.assertEqual(data["schema_version"], updater.SCHEMA_VERSION)
-        self.assertIn(maestro_start, data["cuts"]["inicio"]["rows"])
-        self.assertIn(maestro_course, data["cuts"]["curso"]["rows"])
+        self.assertIn(maestro_start, [row[:9] for row in data["cuts"]["inicio"]["rows"]])
+        self.assertIn(maestro_course, [row[:9] for row in data["cuts"]["curso"]["rows"]])
         start_rows = {updater.row_key(row): row for row in data["cuts"]["inicio"]["rows"]}
         course_rows = {updater.row_key(row): row for row in data["cuts"]["curso"]["rows"]}
         self.assertEqual(start_rows["S1|219|secundaria"][2], 95)
@@ -442,6 +442,70 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         row = updater.parse_block(block, "maestros")
         self.assertIsNotNone(row)
         self.assertEqual(row.specialty_code, "128")
+
+    def test_maestros_detects_english_requirement_in_same_block(self) -> None:
+        block = [
+            "7212 FERRER MARGAIX, SUSANA",
+            "900001 TORREVIEJA(03022092)CEIP NUMERO 16",
+            "128 / EDUCACIO PRIMARIA",
+            "/ ING.23 horas VACANT Adjudicat",
+        ]
+        row = updater.parse_block(block, "maestros")
+        self.assertIsNotNone(row)
+        self.assertTrue(row.english_requirement)
+
+    def test_maestros_without_ing_is_not_marked(self) -> None:
+        block = [
+            "5155 SENENT SOLER, SAUL",
+            "900001 VALENCIA(46000001)CENTRE PUBLIC FPA",
+            "153 / FPA PRIMARIA",
+            "23 horas VACANT Adjudicat",
+        ]
+        row = updater.parse_block(block, "maestros")
+        self.assertIsNotNone(row)
+        self.assertFalse(row.english_requirement)
+
+    def test_secondary_never_uses_master_english_requirement_flag(self) -> None:
+        block = [
+            "95 DOCENTE, PRUEBA",
+            "900001 ALMASSORA(12000251)IES ALVARO FALOMIR",
+            "219 / TECNOLOGIA",
+            "/ ING. VACANT Adjudicat",
+        ]
+        row = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"))
+        self.assertIsNotNone(row)
+        self.assertFalse(row.english_requirement)
+
+
+class EnglishRequirementSchemaTests(unittest.TestCase):
+    def test_legacy_stored_row_is_extended_without_changing_old_fields(self) -> None:
+        old = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", "inicio"]
+        new = updater.row_with_origin(old, "inicio")
+
+        self.assertEqual(new[:9], old)
+        self.assertEqual(new[9], False)
+        self.assertEqual(len(new), 10)
+
+    def test_new_parsed_row_keeps_true_flag_after_origin_is_added(self) -> None:
+        parsed = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", True]
+        stored = updater.row_with_origin(parsed, "curso")
+
+        self.assertEqual(stored[:8], parsed[:8])
+        self.assertEqual(stored[8:], ["curso", True])
+
+    def test_schema_upgrade_is_idempotent(self) -> None:
+        legacy = ["M1", "128", 10, "PRIMARIA", "CEIP", "LLOC", "maestros", "vacante", "inicio"]
+        data = {
+            "schema_version": 3,
+            "cut_format": updater.CUT_FORMAT[:-1],
+            "cuts": {"inicio": {"rows": [legacy]}, "curso": {"rows": []}},
+        }
+
+        self.assertTrue(updater.ensure_cut_schema(data))
+        self.assertEqual(data["schema_version"], 4)
+        self.assertEqual(data["cut_format"][-1], "requisitoIngles")
+        self.assertEqual(data["cuts"]["inicio"]["rows"][0][9], False)
+        self.assertFalse(updater.ensure_cut_schema(data))
 
 
 if __name__ == "__main__":
