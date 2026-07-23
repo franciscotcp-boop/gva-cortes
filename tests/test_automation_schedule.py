@@ -53,10 +53,25 @@ class AutomationScheduleTests(unittest.TestCase):
             ("curso", "posiciones"),
         )
 
+    def test_offered_positions_run_monday_and_wednesday_in_the_season(self) -> None:
+        self.assertEqual(
+            scheduled_modes(local("2026-09-02T11:00:00")),
+            ("puestos",),
+        )
+        self.assertNotIn("puestos", scheduled_modes(local("2026-09-03T11:00:00")))
+
+    def test_offered_positions_include_only_the_first_day_of_july(self) -> None:
+        self.assertEqual(
+            scheduled_modes(local("2026-07-01T09:00:00")),
+            ("inicio", "posiciones", "puestos"),
+        )
+        self.assertNotIn("puestos", scheduled_modes(local("2026-07-08T09:00:00")))
+
     def test_force_modes_are_independent_from_calendar(self) -> None:
         moment = local("2026-08-02T03:00:00")
         self.assertEqual(selected_modes("all", moment), ALL_MODES)
         self.assertEqual(selected_modes("acreditaciones", moment), ("acreditaciones",))
+        self.assertEqual(selected_modes("puestos", moment), ("puestos",))
 
     def test_recovery_modes_are_validated_and_keep_canonical_order(self) -> None:
         self.assertEqual(
