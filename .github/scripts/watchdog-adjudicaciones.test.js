@@ -6,6 +6,7 @@ const test = require("node:test");
 const runWatchdog = require("./watchdog-adjudicaciones.js");
 const {
   buildIncidentReport,
+  calendarModes,
   consecutiveFailureRuns,
   generatedAtHealth,
   shouldMonitor,
@@ -48,8 +49,8 @@ function setWatchdogEnv() {
   process.env.DATA_PATH = "data/adjudicaciones.json";
   process.env.RUN_STALE_MINUTES = "30";
   process.env.DATA_MAX_AGE_MINUTES = "240";
-  process.env.FAILURE_THRESHOLD = "3";
-  process.env.RECOVERY_WAIT_MINUTES = "8";
+  process.env.FAILURE_THRESHOLD = "1";
+  process.env.RECOVERY_WAIT_MINUTES = "15";
   process.env.DRY_RUN = "false";
   process.env.TEST_ALERT = "false";
 }
@@ -129,9 +130,18 @@ function recoveryGithub(now, conclusion = "success") {
   return { github, calls };
 }
 
-test("vigila todos los dias de julio y agosto", () => {
+test("vigila julio a diario por posiciones y agosto salvo domingos", () => {
   assert.equal(shouldMonitor(new Date("2026-07-15T12:00:00Z"), "schedule"), true);
-  assert.equal(shouldMonitor(new Date("2026-08-16T12:00:00Z"), "schedule"), true);
+  assert.equal(shouldMonitor(new Date("2026-08-15T12:00:00Z"), "schedule"), true);
+  assert.equal(shouldMonitor(new Date("2026-08-16T12:00:00Z"), "schedule"), false);
+});
+
+test("calcula las fuentes activas de cada fecha", () => {
+  assert.deepEqual(
+    calendarModes(new Date("2026-07-17T12:00:00Z")),
+    ["inicio", "posiciones", "acreditaciones"]
+  );
+  assert.deepEqual(calendarModes(new Date("2026-09-04T12:00:00Z")), ["acreditaciones"]);
 });
 
 test("de septiembre a junio solo vigila martes y jueves", () => {
@@ -200,7 +210,9 @@ test("simula cancelacion, relanzamiento y recuperacion correcta", async () => {
   const now = new Date();
   const { github, calls } = recoveryGithub(now, "success");
   const core = fakeCore();
-  const result = await runWatchdog({ github, context: context(), core, now, sleepFn: async () => {} });
+  const manualContext = context();
+  manualContext.eventName = "workflow_dispatch";
+  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {} });
 
   assert.equal(result.action, "recovery");
   assert.equal(result.recoverySucceeded, true);
@@ -208,7 +220,11 @@ test("simula cancelacion, relanzamiento y recuperacion correcta", async () => {
   assert.equal(calls.cancel[0].run_id, 751);
   assert.equal(calls.dispatch.length, 1);
   assert.equal(calls.dispatch[0].workflow_id, "update-adjudicaciones.yml");
-  assert.deepEqual(calls.dispatch[0].inputs, { force: "auto", school_year: "" });
+  assert.deepEqual(calls.dispatch[0].inputs, {
+    force: "auto",
+    school_year: "",
+    recovery_modes: calendarModes(now).join(","),
+  });
   assert.equal(calls.issues.length, 1);
   assert.equal(calls.issues[0].assignees[0], "franciscotcp-boop");
   assert.equal(calls.issueUpdates.length, 1);
@@ -220,7 +236,9 @@ test("simula una recuperacion fallida y deja una alerta abierta", async () => {
   const now = new Date();
   const { github, calls } = recoveryGithub(now, "failure");
   const core = fakeCore();
-  const result = await runWatchdog({ github, context: context(), core, now, sleepFn: async () => {} });
+  const manualContext = context();
+  manualContext.eventName = "workflow_dispatch";
+  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {} });
 
   assert.equal(result.recoverySucceeded, false);
   assert.equal(calls.cancel.length, 1);
@@ -230,7 +248,7 @@ test("simula una recuperacion fallida y deja una alerta abierta", async () => {
   assert.equal(core.records.outputs.recovery_succeeded, "false");
 });
 
-test("avisa tras varios fallos aunque haya una ejecucion reciente en marcha", async () => {
+test("espera si tras un fallo ya hay una ejecucion reciente en marcha", async () => {
   setWatchdogEnv();
   const now = new Date();
   const manualContext = context();
@@ -295,13 +313,11 @@ test("avisa tras varios fallos aunque haya una ejecucion reciente en marcha", as
   const core = fakeCore();
   const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {} });
 
-  assert.equal(result.action, "recovery");
-  assert.equal(result.recoverySucceeded, false);
+  assert.equal(result.action, "healthy_run_in_progress");
   assert.equal(calls.cancel.length, 0);
   assert.equal(calls.dispatch.length, 0);
-  assert.equal(calls.issues.length, 1);
-  assert.match(calls.issues[0].body, /Fallos consecutivos/);
-  assert.doesNotMatch(core.records.notices.join("\n"), /ejecucion reciente en marcha/);
+  assert.equal(calls.issues.length, 0);
+  assert.match(core.records.notices.join("\n"), /ejecucion reciente en marcha/);
 });
 
 test("confirma por correo una recuperacion que termino despues del primer aviso", async () => {
@@ -335,7 +351,9 @@ test("confirma por correo una recuperacion que termino despues del primer aviso"
     },
   };
   const core = fakeCore();
-  const result = await runWatchdog({ github, context: context(), core, now, sleepFn: async () => {} });
+  const manualContext = context();
+  manualContext.eventName = "workflow_dispatch";
+  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {} });
 
   assert.equal(result.action, "recovered_after_alert");
   assert.equal(calls.comments.length, 1);
