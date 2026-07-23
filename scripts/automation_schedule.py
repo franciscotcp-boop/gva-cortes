@@ -8,10 +8,11 @@ from zoneinfo import ZoneInfo
 
 
 MADRID = ZoneInfo("Europe/Madrid")
-ALL_MODES = ("inicio", "curso", "posiciones", "acreditaciones")
+ALL_MODES = ("inicio", "curso", "posiciones", "acreditaciones", "puestos")
 START_HOURS = frozenset({9, 12, 15, 18, 21})
 POSITION_HOURS = frozenset({9, 11, 13, 15, 17, 19})
 ACCREDITATION_HOURS = frozenset({12, 14, 16, 18, 20})
+OFFER_HOURS = frozenset({9, 11, 13, 15, 17, 19})
 
 
 def scheduled_modes(value: datetime) -> tuple[str, ...]:
@@ -38,6 +39,13 @@ def scheduled_modes(value: datetime) -> tuple[str, ...]:
     # Acreditaciones: viernes, de septiembre a julio. Agosto queda excluido.
     if month != 8 and weekday == 5 and hour in ACCREDITATION_HOURS:
         modes.append("acreditaciones")
+
+    # Puestos ofertados: lunes y miercoles, de septiembre al 1 de julio.
+    offers_in_season = month in {9, 10, 11, 12, 1, 2, 3, 4, 5, 6} or (
+        month == 7 and current.day == 1
+    )
+    if offers_in_season and weekday in {1, 3} and hour in OFFER_HOURS:
+        modes.append("puestos")
 
     return tuple(modes)
 
