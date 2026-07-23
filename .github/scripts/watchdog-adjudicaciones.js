@@ -25,16 +25,27 @@ function madridCalendar(now = new Date()) {
     timeZone: "Europe/Madrid",
     month: "numeric",
     weekday: "short",
+    hour: "numeric",
+    hourCycle: "h23",
   }).formatToParts(now);
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
-  return { month: Number(values.month), weekday: values.weekday };
+  return { month: Number(values.month), weekday: values.weekday, hour: Number(values.hour) };
+}
+
+function calendarModes(now = new Date()) {
+  const { month, weekday } = madridCalendar(now);
+  const modes = [];
+  if ((month === 7 || month === 8) && weekday !== "Sun") modes.push("inicio");
+  if (month !== 7 && month !== 8 && (weekday === "Tue" || weekday === "Thu")) modes.push("curso");
+  if (month === 6 || month === 7) modes.push("posiciones");
+  if (month !== 8 && weekday === "Fri") modes.push("acreditaciones");
+  return modes;
 }
 
 function shouldMonitor(now = new Date(), eventName = "schedule") {
   if (eventName !== "schedule") return true;
-  const { month, weekday } = madridCalendar(now);
-  if (month === 7 || month === 8) return true;
-  return weekday === "Tue" || weekday === "Thu";
+  const { hour } = madridCalendar(now);
+  return calendarModes(now).length > 0 && hour >= 9 && hour <= 22;
 }
 
 function runAgeMinutes(run, now = new Date()) {
@@ -109,7 +120,7 @@ function buildIncidentReport({
 }) {
   const blocked = staleRuns.length
     ? staleRuns.map(run => `- ${runDescription(run, now)}: ${staleRunReason(run, now)}`).join("\n")
-    : "- No habia una ejecucion bloqueada; se detecto que el JSON no se actualizaba.";
+    : "- No habia una ejecucion bloqueada; se detectaron fallos en una comprobacion reciente.";
   const cancellations = cancellationResults.length
     ? cancellationResults.map(item => `- #${item.run.run_number || item.run.id}: ${item.cancelled ? "cancelada automaticamente" : `no se pudo cancelar (${item.error})`}`).join("\n")
     : "- No fue necesaria ninguna cancelacion.";
@@ -198,8 +209,7 @@ async function findNewDispatch(github, owner, repo, workflowId, dispatchedAt) {
     const runs = await listPrimaryRuns(github, owner, repo, workflowId);
     const match = sortNewest(runs).find(run =>
       run.event === "workflow_dispatch" &&
-      Date.parse(run.created_at) >= earliest &&
-      String(run.display_title || "").toLowerCase().includes("automatico")
+      Date.parse(run.created_at) >= earliest
     );
     if (match) return match;
     await sleep(5000);
@@ -221,7 +231,7 @@ async function resolveRecoveredIncident(github, owner, repo, generatedAt, now = 
     "",
     "**RECUPERACION CONFIRMADA**",
     "",
-    "Una comprobacion posterior confirma que el proceso principal ha terminado correctamente y el JSON vuelve a estar actualizado.",
+    "Una comprobacion posterior confirma que el proceso principal ha vuelto a terminar correctamente.",
     `- Fecha: ${madridTimestamp(now)}`,
     `- generated_at: ${generatedAt || "no disponible"}`,
     "",
@@ -316,7 +326,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     30
   );
   const dataMaxAgeMinutes = positiveNumber(process.env.DATA_MAX_AGE_MINUTES, 240);
-  const failureThreshold = positiveNumber(process.env.FAILURE_THRESHOLD, 3);
+  const failureThreshold = positiveNumber(process.env.FAILURE_THRESHOLD, 1);
   const recoveryWaitMinutes = positiveNumber(process.env.RECOVERY_WAIT_MINUTES, 8);
   const dryRun = envBoolean(process.env.DRY_RUN);
   const testAlert = envBoolean(process.env.TEST_ALERT);
@@ -358,7 +368,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   core.info(`Fallos consecutivos: ${failedRuns.length}; umbral: ${failureThreshold}`);
   core.info(`Limites: ejecucion ${staleMinutes} min; JSON ${dataMaxAgeMinutes} min`);
 
-  const needsRecovery = staleRuns.length > 0 || generatedBefore.stale || Boolean(metadataError);
+  const needsRecovery = staleRuns.length > 0 || repeatedFailures || Boolean(metadataError);
   if (!needsRecovery) {
     if (!dryRun) {
       const resolvedUrl = await resolveRecoveredIncident(
@@ -376,7 +386,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
         return { action: "recovered_after_alert", issueUrl: resolvedUrl };
       }
     }
-    core.notice("Workflow y JSON actualizados. No es necesaria ninguna intervencion.");
+    core.notice("El workflow esta operativo. No es necesaria ninguna intervencion.");
     return { action: "healthy" };
   }
 
@@ -390,9 +400,34 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     };
   }
 
-  if (!staleRuns.length && healthyRuns.length && !(generatedBefore.stale && repeatedFailures)) {
-    core.notice("El JSON esta retrasado, pero ya hay una ejecucion reciente en marcha. Se esperara a la siguiente vigilancia.");
+  if (!staleRuns.length && healthyRuns.length) {
+    core.notice("Ya hay una ejecucion reciente en marcha. Se esperara a la siguiente vigilancia.");
     return { action: "healthy_run_in_progress" };
+  }
+
+  const existingIncident = await findOpenFailureIssue(github, owner, repo);
+  if (existingIncident) {
+    const cancelled = [];
+    for (const run of staleRuns) {
+      try {
+        await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run.id });
+        cancelled.push(`#${run.run_number || run.id}`);
+      } catch (error) {
+        core.warning(`No se pudo cancelar #${run.run_number || run.id}: ${error.message}`);
+      }
+    }
+    if (cancelled.length) {
+      await github.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: existingIncident.number,
+        body: `Se cancelaron ejecuciones nuevamente bloqueadas (${cancelled.join(", ")}). No se lanza otro reintento mientras esta incidencia siga abierta.`,
+      });
+    }
+    core.warning(`La incidencia ${existingIncident.html_url} sigue abierta; se evita encadenar nuevos reintentos.`);
+    core.setOutput("alert_sent", "true");
+    core.setOutput("alert_url", existingIncident.html_url);
+    return { action: "incident_already_open", issueUrl: existingIncident.html_url };
   }
 
   const cancellationResults = [];
@@ -415,6 +450,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
 
   if (!recoveryRun) {
     const dispatchedAt = new Date();
+    const modes = calendarModes(now).join(",");
     await github.rest.actions.createWorkflowDispatch({
       owner,
       repo,
@@ -422,7 +458,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
       ref: context.payload.repository && context.payload.repository.default_branch
         ? context.payload.repository.default_branch
         : "main",
-      inputs: { force: "auto", school_year: "" },
+      inputs: { force: "auto", school_year: "", recovery_modes: modes },
     });
     recoveryRun = await findNewDispatch(github, owner, repo, workflowId, dispatchedAt);
     recoveryStarted = Boolean(recoveryRun);
@@ -447,16 +483,16 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   );
 
   const runSucceeded = Boolean(finalRun && finalRun.status === "completed" && finalRun.conclusion === "success");
-  const recoverySucceeded = runSucceeded && !generatedAfter.stale && !metadataAfterError;
+  const recoverySucceeded = runSucceeded && !metadataAfterError;
   const recoveryMessage = recoverySucceeded
-    ? "La nueva comprobacion termino correctamente y generated_at vuelve a estar actualizado."
+    ? "La nueva comprobacion termino correctamente; si no habia documentos nuevos, generated_at puede permanecer sin cambios."
     : [
         finalRun
           ? `La ejecucion termino con estado ${finalRun.status} y resultado ${finalRun.conclusion || "sin resultado"}.`
           : "GitHub no mostro una nueva ejecucion dentro del tiempo de espera.",
         metadataAfterError
           ? `No se pudo comprobar el JSON: ${metadataAfterError}.`
-          : `generated_at ${generatedAfter.stale ? "sigue retrasado" : "esta actualizado"}.`,
+          : `generated_at ${generatedAfter.stale ? "permanece antiguo" : "esta actualizado"}.`,
       ].join(" ");
 
   const report = buildIncidentReport({
@@ -489,6 +525,7 @@ module.exports = runWatchdog;
 module.exports._test = {
   ageMinutes,
   buildIncidentReport,
+  calendarModes,
   consecutiveFailureRuns,
   envBoolean,
   generatedAtHealth,

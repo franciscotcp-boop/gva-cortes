@@ -1,1 +1,2 @@
 pdfplumber>=0.11,<0.12
+pypdf>=5,<7
