@@ -24,21 +24,29 @@ function madridCalendar(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/Madrid",
     month: "numeric",
+    day: "numeric",
     weekday: "short",
     hour: "numeric",
     hourCycle: "h23",
   }).formatToParts(now);
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
-  return { month: Number(values.month), weekday: values.weekday, hour: Number(values.hour) };
+  return {
+    month: Number(values.month),
+    day: Number(values.day),
+    weekday: values.weekday,
+    hour: Number(values.hour),
+  };
 }
 
 function calendarModes(now = new Date()) {
-  const { month, weekday } = madridCalendar(now);
+  const { month, day, weekday } = madridCalendar(now);
   const modes = [];
   if ((month === 7 || month === 8) && weekday !== "Sun") modes.push("inicio");
   if (month !== 7 && month !== 8 && (weekday === "Tue" || weekday === "Thu")) modes.push("curso");
   if (month === 6 || month === 7) modes.push("posiciones");
   if (month !== 8 && weekday === "Fri") modes.push("acreditaciones");
+  const offersInSeason = (month >= 9 || month <= 6) || (month === 7 && day === 1);
+  if (offersInSeason && (weekday === "Mon" || weekday === "Wed")) modes.push("puestos");
   return modes;
 }
 
