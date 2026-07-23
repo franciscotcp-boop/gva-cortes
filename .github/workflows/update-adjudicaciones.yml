@@ -15,6 +15,7 @@ on:
           - curso
           - posiciones
           - acreditaciones
+          - puestos
           - all
       school_year:
         description: "Curso objetivo opcional, por ejemplo 2026-2027"
@@ -127,6 +128,22 @@ jobs:
           SOURCE_HTTP_RETRY_DELAY_SECONDS: "20"
         run: python scripts/update_source_data.py --force acreditaciones
 
+      - name: Actualizar puestos ofertados
+        id: puestos
+        if: steps.calendar.outputs.puestos == 'true'
+        continue-on-error: true
+        env:
+          SCHOOL_YEAR: ${{ inputs.school_year || '' }}
+          SOURCE_HTTP_TIMEOUT_SECONDS: "90"
+          SOURCE_HTTP_ATTEMPTS: "3"
+          SOURCE_HTTP_RETRY_DELAY_SECONDS: "20"
+        run: |
+          args=()
+          if [ -n "$SCHOOL_YEAR" ]; then
+            args+=(--school-year "$SCHOOL_YEAR")
+          fi
+          python scripts/update_offered_positions.py "${args[@]}"
+
       - name: Guardar solamente datos validados
         if: >-
           always() &&
@@ -140,6 +157,7 @@ jobs:
             data/posiciones_bolsa.json \
             data/position_context_state.json \
             data/english_accreditations.json.gz \
+            data/puestos_ofertados.json \
             data/source_monitor_state.json
           if git diff --cached --quiet; then
             echo "No hay datos nuevos que guardar."
@@ -157,9 +175,10 @@ jobs:
           ADJUDICACIONES_RESULT: ${{ steps.adjudicaciones.outcome }}
           POSICIONES_RESULT: ${{ steps.posiciones.outcome }}
           ACREDITACIONES_RESULT: ${{ steps.acreditaciones.outcome }}
+          PUESTOS_RESULT: ${{ steps.puestos.outcome }}
         run: |
           failed=0
-          for result in "$ADJUDICACIONES_RESULT" "$POSICIONES_RESULT" "$ACREDITACIONES_RESULT"; do
+          for result in "$ADJUDICACIONES_RESULT" "$POSICIONES_RESULT" "$ACREDITACIONES_RESULT" "$PUESTOS_RESULT"; do
             if [ "$result" = "failure" ]; then
               failed=1
             fi
