@@ -3,8 +3,8 @@ run-name: Vigilar adjudicaciones (${{ github.event_name }})
 
 on:
   schedule:
-    # Treinta y cinco minutos despues de cada comprobacion principal.
-    - cron: "52 */4 * * *"
+    # Cada 15 minutos dentro de una ventana UTC amplia; el script aplica Madrid.
+    - cron: "*/15 7-22 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -32,11 +32,11 @@ concurrency:
 jobs:
   watchdog:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 22
 
     steps:
       - name: Descargar solamente el codigo del vigilante
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
 
       - name: Comprobar vigilante
         run: node --test .github/scripts/watchdog-adjudicaciones.test.js
@@ -48,9 +48,9 @@ jobs:
           PRIMARY_WORKFLOW: update-adjudicaciones.yml
           DATA_PATH: data/adjudicaciones.json
           RUN_STALE_MINUTES: "30"
-          DATA_MAX_AGE_MINUTES: "240"
-          FAILURE_THRESHOLD: "3"
-          RECOVERY_WAIT_MINUTES: "8"
+          DATA_MAX_AGE_MINUTES: "1440"
+          FAILURE_THRESHOLD: "1"
+          RECOVERY_WAIT_MINUTES: "15"
           DRY_RUN: ${{ inputs.dry_run || false }}
           TEST_ALERT: ${{ inputs.test_alert || false }}
         with:

@@ -1,5 +1,5 @@
 name: Actualizar adjudicaciones
-run-name: Actualizar adjudicaciones (${{ github.event_name }})
+run-name: Actualizar adjudicaciones (${{ github.event_name }}${{ inputs.force && format(' · {0}', inputs.force) || '' }})
 
 on:
   workflow_dispatch:
@@ -13,15 +13,22 @@ on:
           - auto
           - inicio
           - curso
+          - posiciones
+          - acreditaciones
           - all
       school_year:
-        description: "Curso objetivo opcional, por ejemplo 2025-2026"
+        description: "Curso objetivo opcional, por ejemplo 2026-2027"
+        required: false
+        type: string
+        default: ""
+      recovery_modes:
+        description: "Uso interno del vigilante"
         required: false
         type: string
         default: ""
   schedule:
-    # Cada cuatro horas. La primera tarea aplica el calendario de Espana.
-    - cron: "17 */4 * * *"
+    # Ventana UTC amplia. El selector aplica las horas exactas de Europe/Madrid.
+    - cron: "17 7-20 * * *"
 
 permissions:
   contents: write
@@ -33,80 +40,131 @@ concurrency:
 jobs:
   update-json:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
 
     steps:
-      - name: Comprobar calendario
-        id: calendar
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "$EVENT_NAME" != "schedule" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          month=$(TZ=Europe/Madrid date +%-m)
-          weekday=$(TZ=Europe/Madrid date +%u)
-          if (( month == 7 || month == 8 )); then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif (( (month >= 1 && month <= 6) || (month >= 9 && month <= 12) )) && (( weekday == 2 || weekday == 4 )); then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Descargar repositorio
-        if: steps.calendar.outputs.run == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
 
       - name: Preparar Python
-        if: steps.calendar.outputs.run == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
 
+      - name: Seleccionar comprobaciones de este turno
+        id: calendar
+        env:
+          FORCE_MODE: ${{ inputs.force || 'auto' }}
+          RECOVERY_MODES: ${{ inputs.recovery_modes || '' }}
+        run: |
+          python scripts/automation_schedule.py \
+            --force "$FORCE_MODE" \
+            --modes "$RECOVERY_MODES" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Mostrar calendario aplicado
+        run: echo "Comprobaciones seleccionadas=${{ steps.calendar.outputs.modes || 'ninguna' }}"
+
       - name: Instalar dependencias
         if: steps.calendar.outputs.run == 'true'
         run: python -m pip install -r requirements.txt
 
-      - name: Comprobar extractor
+      - name: Comprobar extractores y calendario
+        id: tests
         if: steps.calendar.outputs.run == 'true'
         run: python -m unittest discover -s tests -v
 
-      - name: Actualizar JSON
-        if: steps.calendar.outputs.run == 'true'
+      - name: Actualizar cortes de adjudicaciones
+        id: adjudicaciones
+        if: steps.calendar.outputs.inicio == 'true' || steps.calendar.outputs.curso == 'true'
+        continue-on-error: true
         env:
-          FORCE_MODE: ${{ github.event.inputs.force || 'auto' }}
-          SCHOOL_YEAR: ${{ github.event.inputs.school_year || '' }}
+          SCHOOL_YEAR: ${{ inputs.school_year || '' }}
+          RUN_INICIO: ${{ steps.calendar.outputs.inicio }}
+          RUN_CURSO: ${{ steps.calendar.outputs.curso }}
           HTTP_TIMEOUT_SECONDS: "120"
-          SOURCE_RETRY_WINDOW_SECONDS: "1800"
-          SOURCE_RETRY_TIMEOUT_SECONDS: "600"
+          SOURCE_RETRY_WINDOW_SECONDS: "600"
+          SOURCE_RETRY_TIMEOUT_SECONDS: "180"
           SOURCE_RETRY_DELAY_SECONDS: "30"
         run: |
-          args=()
+          if [ "$RUN_INICIO" = "true" ] && [ "$RUN_CURSO" = "true" ]; then
+            mode=all
+          elif [ "$RUN_INICIO" = "true" ]; then
+            mode=inicio
+          else
+            mode=curso
+          fi
+          args=(--force "$mode")
           if [ -n "$SCHOOL_YEAR" ]; then
             args+=(--school-year "$SCHOOL_YEAR")
           fi
-          if [ "$FORCE_MODE" != "auto" ]; then
-            args+=(--force "$FORCE_MODE")
-          fi
-          if [ "${#args[@]}" -gt 0 ]; then
-            python scripts/update_adjudicaciones.py "${args[@]}"
-          else
-            python scripts/update_adjudicaciones.py
-          fi
+          python scripts/update_adjudicaciones.py "${args[@]}"
 
-      - name: Guardar cambios
-        if: steps.calendar.outputs.run == 'true'
+      - name: Actualizar posiciones anuales
+        id: posiciones
+        if: steps.calendar.outputs.posiciones == 'true'
+        continue-on-error: true
+        env:
+          SCHOOL_YEAR: ${{ inputs.school_year || '' }}
+          SOURCE_HTTP_TIMEOUT_SECONDS: "90"
+          SOURCE_HTTP_ATTEMPTS: "3"
+          SOURCE_HTTP_RETRY_DELAY_SECONDS: "20"
+        run: |
+          args=(--force posiciones)
+          if [[ "$SCHOOL_YEAR" =~ ^([0-9]{4})-[0-9]{4}$ ]]; then
+            args+=(--target-year "${BASH_REMATCH[1]}")
+          fi
+          python scripts/update_source_data.py "${args[@]}"
+
+      - name: Actualizar acreditaciones de ingles
+        id: acreditaciones
+        if: steps.calendar.outputs.acreditaciones == 'true'
+        continue-on-error: true
+        env:
+          SOURCE_HTTP_TIMEOUT_SECONDS: "90"
+          SOURCE_HTTP_ATTEMPTS: "3"
+          SOURCE_HTTP_RETRY_DELAY_SECONDS: "20"
+        run: python scripts/update_source_data.py --force acreditaciones
+
+      - name: Guardar solamente datos validados
+        if: >-
+          always() &&
+          steps.calendar.outputs.run == 'true' &&
+          steps.tests.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/adjudicaciones.json data/posiciones_bolsa.json data/position_context_state.json
+          git add \
+            data/adjudicaciones.json \
+            data/posiciones_bolsa.json \
+            data/position_context_state.json \
+            data/english_accreditations.json.gz \
+            data/source_monitor_state.json
           if git diff --cached --quiet; then
-            echo "No hay cambios que guardar."
+            echo "No hay datos nuevos que guardar."
           else
-            git commit -m "Actualizar adjudicaciones"
+            git commit -m "Actualizar datos de AdjudicApp"
             git push
+          fi
+
+      - name: Comunicar fallos de las fuentes al vigilante
+        if: >-
+          always() &&
+          steps.calendar.outputs.run == 'true' &&
+          steps.tests.outcome == 'success'
+        env:
+          ADJUDICACIONES_RESULT: ${{ steps.adjudicaciones.outcome }}
+          POSICIONES_RESULT: ${{ steps.posiciones.outcome }}
+          ACREDITACIONES_RESULT: ${{ steps.acreditaciones.outcome }}
+        run: |
+          failed=0
+          for result in "$ADJUDICACIONES_RESULT" "$POSICIONES_RESULT" "$ACREDITACIONES_RESULT"; do
+            if [ "$result" = "failure" ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -eq 1 ]; then
+            echo "Una o varias fuentes oficiales no pudieron procesarse."
+            exit 1
           fi
