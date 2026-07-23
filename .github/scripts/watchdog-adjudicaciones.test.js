@@ -144,10 +144,22 @@ test("calcula las fuentes activas de cada fecha", () => {
   assert.deepEqual(calendarModes(new Date("2026-09-04T12:00:00Z")), ["acreditaciones"]);
 });
 
-test("de septiembre a junio solo vigila martes y jueves", () => {
+test("de septiembre a junio vigila adjudicaciones y puestos ofertados", () => {
   assert.equal(shouldMonitor(new Date("2026-09-01T12:00:00Z"), "schedule"), true);
   assert.equal(shouldMonitor(new Date("2026-09-03T12:00:00Z"), "schedule"), true);
-  assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), "schedule"), false);
+  assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), "schedule"), true);
+  assert.deepEqual(calendarModes(new Date("2026-09-02T12:00:00Z")), ["puestos"]);
+});
+
+test("los puestos ofertados terminan el uno de julio", () => {
+  assert.deepEqual(
+    calendarModes(new Date("2026-07-01T12:00:00Z")),
+    ["inicio", "posiciones", "puestos"]
+  );
+  assert.deepEqual(
+    calendarModes(new Date("2026-07-08T12:00:00Z")),
+    ["inicio", "posiciones"]
+  );
 });
 
 test("las comprobaciones manuales siempre estan permitidas", () => {
