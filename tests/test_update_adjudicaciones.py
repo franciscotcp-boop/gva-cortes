@@ -434,6 +434,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertEqual(row.candidate_name, "GOMEZ NEBOT, HECTOR")
         self.assertEqual(row.workload, "C")
         self.assertFalse(row.itinerant)
+        self.assertEqual(row.slot_id, "921979")
 
     def test_workload_and_itinerancy_are_read_from_the_awarded_block(self) -> None:
         block = [
@@ -447,6 +448,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertIsNotNone(row)
         self.assertEqual(row.workload, 23)
         self.assertTrue(row.itinerant)
+        self.assertEqual(row.slot_id, "920377")
 
     def test_maestros_keeps_assignment_specialty(self) -> None:
         block = [

@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import pdfplumber
 
 from position_context import PositionContextUpdater
+from update_offered_positions import reconcile_after_adjudication
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,7 @@ CENTER_OVERRIDES_PATH = ROOT / "data" / "center_overrides.json"
 CENTER_WEB_OVERRIDES_PATH = ROOT / "data" / "center_web_overrides.json"
 POSITIONS_PATH = ROOT / "data" / "posiciones_bolsa.json"
 POSITION_CONTEXT_STATE_PATH = ROOT / "data" / "position_context_state.json"
+OFFERED_POSITIONS_PATH = ROOT / "data" / "puestos_ofertados.json"
 TZ = ZoneInfo("Europe/Madrid")
 
 START_PAGE_URL = "https://ceice.gva.es/es/web/rrhh-educacion/adjudicacion3"
@@ -221,6 +223,7 @@ class Adjudication:
     english_requirement: bool
     workload: int | str
     itinerant: bool
+    slot_id: str = ""
 
 
 @dataclass
@@ -753,7 +756,7 @@ def load_centers(existing: list[list]) -> tuple[list[list], dict[str, dict[str, 
 
 
 CANDIDATE_RE = re.compile(r"^(\d{1,5})(?:\s*/\s*\d{1,5})?\s+(?!\s*/)[^,]+,\s+.+")
-CENTER_RE = re.compile(r"^\d{5,7}\s+(.+)\((\d{8})\)(.+)$")
+CENTER_RE = re.compile(r"^(\d{5,7})\s+(.+)\((\d{8})\)(.+)$")
 SPECIALTY_RE = re.compile(r"^([0-9A-Z]{3})\s*/\s*(.+)$")
 PAGE_SPECIALTY_PREFIX_RE = re.compile(r"^([0-9A-Z]{3})\s+(.+)$")
 PAGE_SPECIALTY_SUFFIX_RE = re.compile(r"^(.+?)\s*([0-9A-Z]{3})$")
@@ -880,16 +883,17 @@ def parse_block(
     return Adjudication(
         cut=int(match_cut.group(1)),
         candidate_name=candidate_name_from_line(block[0], match_cut),
-        center_code=center_match.group(2),
+        center_code=center_match.group(3),
         specialty_code=specialty_code,
         specialty_name=specialty_name,
-        center_name=clean(center_match.group(3)),
-        locality=clean(center_match.group(1)),
+        center_name=clean(center_match.group(4)),
+        locality=clean(center_match.group(2)),
         body=body,
         placement_type=detect_placement_type(block),
         english_requirement=detect_english_requirement(block, body),
         workload=detect_workload(block),
         itinerant=detect_itinerant(block),
+        slot_id=center_match.group(1),
     )
 
 
@@ -1588,6 +1592,28 @@ def run_mode(
         result = apply_vacancy_totals_curso(data, parsed_items) or result
     if position_context is not None and parsed_items:
         position_context.apply(parsed_items, mode)
+    if mode == "curso" and parsed_items:
+        adjudication_date = max(
+            str(item.published_date or "") for item in parsed_items
+        )
+        academic_year = school_year_for_date(adjudication_date, now_local())
+        reconciliation = reconcile_after_adjudication(
+            output=OFFERED_POSITIONS_PATH,
+            assignments=[
+                assignment
+                for item in parsed_items
+                for assignment in item.assignments
+            ],
+            academic_year=academic_year,
+            adjudication_date=adjudication_date,
+        )
+        if reconciliation.get("removed"):
+            print(
+                "puestos ofertados: "
+                f"{reconciliation['removed']} cubiertos retirados; "
+                f"{reconciliation['remaining']} no cubiertos conservados"
+            )
+            result = True
     return result
 
 

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -17,17 +18,27 @@ from update_offered_positions import (
     academic_year_for_check,
     document_date_hint,
     links_for_latest_target_document,
+    merge_snapshot,
     offered_position_links,
+    prune_expired_difficult,
+    reconcile_after_adjudication,
     update_from_page,
     valid_academic_year,
 )
 
 
-def sample_item(order: int, center_code: str = "03000001") -> list:
+def sample_item(
+    order: int,
+    center_code: str = "03000001",
+    *,
+    specialty_code: str = "128",
+    difficult: bool = False,
+    snapshot_date: str = "2026-09-07",
+) -> list:
     return [
         order,
         "maestros",
-        "128",
+        specialty_code,
         "Alicante",
         "ELX",
         center_code,
@@ -38,6 +49,10 @@ def sample_item(order: int, center_code: str = "03000001") -> list:
         False,
         "",
         "vacante",
+        "",
+        difficult,
+        snapshot_date,
+        False,
     ]
 
 
@@ -151,7 +166,11 @@ class OfferedPositionUpdateTests(unittest.TestCase):
         page_url = "https://ceice.gva.es/pagina"
         pdf_url = "https://ceice.gva.es/docs/260909_pue_prov.pdf"
         html = f'<a href="{pdf_url}">Puestos ofertados</a>'.encode()
-        replacement = published_payload("2026-09-09", [sample_item(3)], "new")
+        replacement = published_payload(
+            "2026-09-09",
+            [sample_item(3, snapshot_date="2026-09-09")],
+            "new",
+        )
 
         def fetch(url: str) -> bytes:
             return html if url == page_url else b"%PDF-test"
@@ -171,7 +190,10 @@ class OfferedPositionUpdateTests(unittest.TestCase):
 
         saved = json.loads(self.output.read_text(encoding="utf-8"))
         self.assertEqual(result["result"], "updated")
-        self.assertEqual(saved["items"], [sample_item(3)])
+        self.assertEqual(len(saved["items"]), 1)
+        self.assertEqual(saved["items"][0][0], 1)
+        self.assertEqual(saved["items"][0][7], "000003")
+        self.assertEqual(saved["items"][0][15], "2026-09-09")
 
     def test_new_course_without_pdf_clears_previous_snapshot(self) -> None:
         old = published_payload("2026-06-02", [sample_item(1)], "old")
@@ -196,6 +218,102 @@ class OfferedPositionUpdateTests(unittest.TestCase):
         self.assertEqual(saved["academic_year"], "2026-2027")
         self.assertEqual(saved["items"], [])
         self.assertEqual(saved["status"], "awaiting_first_continuous_adjudication")
+
+    def test_ordinary_and_difficult_snapshots_replace_only_their_own_kind(self) -> None:
+        ordinary = published_payload(
+            "2026-09-07",
+            [sample_item(1, snapshot_date="2026-09-07")],
+            "ordinary-old",
+        )
+        ordinary["source"]["kind"] = "ordinary"
+        ordinary["snapshots"] = {
+            "ordinary": {
+                "publication_date": "2026-09-07",
+                "source": ordinary["source"],
+            }
+        }
+        difficult = published_payload(
+            "2026-09-11",
+            [sample_item(2, difficult=True, snapshot_date="2026-09-11")],
+            "difficult",
+        )
+        difficult["source"]["kind"] = "difficult"
+        merged = merge_snapshot(ordinary, difficult, "difficult")
+
+        replacement = published_payload(
+            "2026-09-09",
+            [sample_item(3, center_code="03000002", snapshot_date="2026-09-09")],
+            "ordinary-new",
+        )
+        replacement["source"]["kind"] = "ordinary"
+        final = merge_snapshot(merged, replacement, "ordinary")
+
+        self.assertEqual(len(final["items"]), 2)
+        self.assertEqual(set(final["snapshots"]), {"ordinary", "difficult"})
+        difficult_rows = [row for row in final["items"] if row[14] is True]
+        ordinary_rows = [row for row in final["items"] if row[14] is False]
+        self.assertEqual(difficult_rows[0][7], "000002")
+        self.assertEqual(ordinary_rows[0][5], "03000002")
+
+    def test_difficult_positions_expire_when_the_calendar_day_changes(self) -> None:
+        payload = published_payload(
+            "2026-09-11",
+            [
+                sample_item(1, snapshot_date="2026-09-09"),
+                sample_item(2, difficult=True, snapshot_date="2026-09-11"),
+            ],
+            "mixed",
+        )
+        payload["snapshots"] = {
+            "ordinary": {"publication_date": "2026-09-09", "source": {}},
+            "difficult": {"publication_date": "2026-09-11", "source": {}},
+        }
+
+        same_day, removed_same_day = prune_expired_difficult(
+            payload, date(2026, 9, 11)
+        )
+        next_day, removed_next_day = prune_expired_difficult(
+            payload, date(2026, 9, 12)
+        )
+
+        self.assertEqual(removed_same_day, 0)
+        self.assertEqual(len(same_day["items"]), 2)
+        self.assertEqual(removed_next_day, 1)
+        self.assertEqual(len(next_day["items"]), 1)
+        self.assertNotIn("difficult", next_day["snapshots"])
+
+    def test_adjudication_removes_filled_slot_and_keeps_unfilled_offer(self) -> None:
+        payload = published_payload(
+            "2026-09-09",
+            [
+                sample_item(1, snapshot_date="2026-09-09"),
+                sample_item(2, center_code="03000002", snapshot_date="2026-09-09"),
+            ],
+            "ordinary",
+        )
+        payload["snapshots"] = {
+            "ordinary": {"publication_date": "2026-09-09", "source": payload["source"]}
+        }
+        self.output.write_text(json.dumps(payload), encoding="utf-8")
+
+        result = reconcile_after_adjudication(
+            output=self.output,
+            assignments=[
+                SimpleNamespace(
+                    slot_id="000001",
+                    center_code="03000001",
+                    specialty_code="128",
+                )
+            ],
+            academic_year="2026-2027",
+            adjudication_date="2026-09-10",
+        )
+
+        saved = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(result["removed"], 1)
+        self.assertEqual(result["remaining"], 1)
+        self.assertEqual(saved["items"][0][7], "000002")
+        self.assertIs(saved["items"][0][16], True)
 
 
 if __name__ == "__main__":

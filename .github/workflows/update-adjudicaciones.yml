@@ -16,6 +16,8 @@ on:
           - posiciones
           - acreditaciones
           - puestos
+          - dificil
+          - limpieza_puestos
           - all
       school_year:
         description: "Curso objetivo opcional, por ejemplo 2026-2027"
@@ -29,7 +31,7 @@ on:
         default: ""
   schedule:
     # Ventana UTC amplia. El selector aplica las horas exactas de Europe/Madrid.
-    - cron: "17 7-20 * * *"
+    - cron: "20 7-23 * * *"
 
 permissions:
   contents: write
@@ -142,7 +144,29 @@ jobs:
           if [ -n "$SCHOOL_YEAR" ]; then
             args+=(--school-year "$SCHOOL_YEAR")
           fi
+          python scripts/update_offered_positions.py --mode ordinary "${args[@]}"
+
+      - name: Actualizar puestos de difícil cobertura
+        id: dificil
+        if: steps.calendar.outputs.dificil == 'true'
+        continue-on-error: true
+        env:
+          SCHOOL_YEAR: ${{ inputs.school_year || '' }}
+          SOURCE_HTTP_TIMEOUT_SECONDS: "90"
+          SOURCE_HTTP_ATTEMPTS: "3"
+          SOURCE_HTTP_RETRY_DELAY_SECONDS: "20"
+        run: |
+          args=(--mode difficult)
+          if [ -n "$SCHOOL_YEAR" ]; then
+            args+=(--school-year "$SCHOOL_YEAR")
+          fi
           python scripts/update_offered_positions.py "${args[@]}"
+
+      - name: Retirar difícil cobertura caducada
+        id: limpieza_puestos
+        if: steps.calendar.outputs.limpieza_puestos == 'true'
+        continue-on-error: true
+        run: python scripts/update_offered_positions.py --expire-difficult
 
       - name: Guardar solamente datos validados
         if: >-
@@ -176,9 +200,11 @@ jobs:
           POSICIONES_RESULT: ${{ steps.posiciones.outcome }}
           ACREDITACIONES_RESULT: ${{ steps.acreditaciones.outcome }}
           PUESTOS_RESULT: ${{ steps.puestos.outcome }}
+          DIFICIL_RESULT: ${{ steps.dificil.outcome }}
+          LIMPIEZA_PUESTOS_RESULT: ${{ steps.limpieza_puestos.outcome }}
         run: |
           failed=0
-          for result in "$ADJUDICACIONES_RESULT" "$POSICIONES_RESULT" "$ACREDITACIONES_RESULT" "$PUESTOS_RESULT"; do
+          for result in "$ADJUDICACIONES_RESULT" "$POSICIONES_RESULT" "$ACREDITACIONES_RESULT" "$PUESTOS_RESULT" "$DIFICIL_RESULT" "$LIMPIEZA_PUESTOS_RESULT"; do
             if [ "$result" = "failure" ]; then
               failed=1
             fi

@@ -4,6 +4,11 @@ const QUEUE_STATUSES = new Set(["queued", "requested", "waiting", "pending"]);
 const ACTIVE_STATUSES = new Set([...QUEUE_STATUSES, "in_progress"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
 const FAILURE_ISSUE_TITLE = "[AdjudicApp] Recuperacion automatica fallida";
+const START_HOURS = new Set([9, 12, 15, 18, 21]);
+const POSITION_HOURS = new Set([9, 11, 13, 15, 17, 19]);
+const ACCREDITATION_HOURS = new Set([12, 14, 16, 18, 20]);
+const OFFER_HOURS = new Set([9, 11, 13, 15, 17, 19]);
+const DIFFICULT_HOURS = new Set([9, 11, 13, 15, 17, 19, 21, 23]);
 
 function envBoolean(value) {
   return /^(1|true|yes|si)$/i.test(String(value || ""));
@@ -39,21 +44,22 @@ function madridCalendar(now = new Date()) {
 }
 
 function calendarModes(now = new Date()) {
-  const { month, day, weekday } = madridCalendar(now);
+  const { month, day, weekday, hour } = madridCalendar(now);
   const modes = [];
-  if ((month === 7 || month === 8) && weekday !== "Sun") modes.push("inicio");
-  if (month !== 7 && month !== 8 && (weekday === "Tue" || weekday === "Thu")) modes.push("curso");
-  if (month === 6 || month === 7) modes.push("posiciones");
-  if (month !== 8 && weekday === "Fri") modes.push("acreditaciones");
+  if ((month === 7 || month === 8) && weekday !== "Sun" && START_HOURS.has(hour)) modes.push("inicio");
+  if (month !== 7 && month !== 8 && (weekday === "Tue" || weekday === "Thu") && START_HOURS.has(hour)) modes.push("curso");
+  if ((month === 6 || month === 7) && POSITION_HOURS.has(hour)) modes.push("posiciones");
+  if (month !== 8 && weekday === "Fri" && ACCREDITATION_HOURS.has(hour)) modes.push("acreditaciones");
   const offersInSeason = (month >= 9 || month <= 6) || (month === 7 && day === 1);
-  if (offersInSeason && (weekday === "Mon" || weekday === "Wed")) modes.push("puestos");
+  if (offersInSeason && (weekday === "Mon" || weekday === "Wed") && OFFER_HOURS.has(hour)) modes.push("puestos");
+  if (month !== 7 && month !== 8 && weekday === "Fri" && DIFFICULT_HOURS.has(hour)) modes.push("dificil");
+  if (month !== 7 && month !== 8 && weekday === "Sat" && hour === 0) modes.push("limpieza_puestos");
   return modes;
 }
 
 function shouldMonitor(now = new Date(), eventName = "schedule") {
   if (eventName !== "schedule") return true;
-  const { hour } = madridCalendar(now);
-  return calendarModes(now).length > 0 && hour >= 9 && hour <= 22;
+  return calendarModes(now).length > 0;
 }
 
 function runAgeMinutes(run, now = new Date()) {

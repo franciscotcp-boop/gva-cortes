@@ -11,7 +11,7 @@ from typing import Any
 import pdfplumber
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DATASET = "puestos_ofertados"
 UPDATE_MODE = "replace_latest_snapshot"
 SLOT_X_MIN = 293.4
@@ -44,11 +44,25 @@ ITEM_FIELDS = [
     "itinerant",
     "observations",
     "placement_type",
+    "composition",
+    "difficult_coverage",
+    "snapshot_date",
+    "retained_unfilled",
 ]
 
 
 def compact_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def deduplicate_repeated_text(value: str | None) -> str:
+    text = compact_text(value)
+    words = text.split()
+    if len(words) >= 2 and len(words) % 2 == 0:
+        half = len(words) // 2
+        if words[:half] == words[half:]:
+            return " ".join(words[:half])
+    return text
 
 
 def normalize_date(raw: str) -> str:
@@ -84,15 +98,19 @@ def normalize_placement(raw: str) -> str:
     key = compact_text(raw).upper()
     if key in {"VACANTE", "VACANT"}:
         return "vacante"
-    if "INDETERMINADA" in key:
+    if "INDETERMINADA" in key or re.search(r"\bSUST\.?\s*IND\.?\b", key):
         return "sub_indeterminada"
-    if "DETERMINADA" in key:
+    if "DETERMINADA" in key or re.search(r"\bSUST\.?\s*DET\.?\b", key):
         return "sub_determinada"
     raise ValueError(f"Tipo de puesto no reconocido: {raw!r}")
 
 
 def parse_specialty(raw: str) -> tuple[str, str]:
-    match = re.match(r"^([0-9A-Z]+)\s*-\s*(.+)$", compact_text(raw), re.IGNORECASE)
+    match = re.match(
+        r"^([0-9A-Z]+)\s*(?:-\s*)?(.+)$",
+        compact_text(raw),
+        re.IGNORECASE,
+    )
     if not match:
         raise ValueError(f"Especialidad no reconocida: {raw!r}")
     return match.group(1).upper(), match.group(2).strip()
@@ -270,6 +288,10 @@ def parse_pdf(
                         itinerant,
                         observations,
                         normalize_placement(placement_raw),
+                        "",
+                        False,
+                        publication_date,
+                        False,
                     ]
                 )
 
@@ -299,6 +321,202 @@ def parse_pdf(
     )
 
 
+def column_text(
+    page: pdfplumber.page.Page,
+    x0: float,
+    x1: float,
+    top: float,
+    bottom: float,
+) -> str:
+    return compact_text(
+        page.crop((x0, max(0, top), x1, min(float(page.height), bottom))).extract_text(
+            x_tolerance=1,
+            y_tolerance=2,
+        )
+    )
+
+
+def parse_hours(raw: str) -> float | None:
+    match = re.search(r"(?<!\d)(\d{1,2}(?:[,.]\d+)?)(?!\d)", compact_text(raw))
+    return float(match.group(1).replace(",", ".")) if match else None
+
+
+def parse_yes_no(raw: str, *, page_number: int, slot_id: str) -> bool:
+    key = compact_text(raw).upper().rstrip(".")
+    if key in {"SI", "SÍ"}:
+        return True
+    if key == "NO":
+        return False
+    raise ValueError(
+        f"Itinerancia no reconocida en página {page_number}, puesto {slot_id}: {raw!r}"
+    )
+
+
+def parse_difficult_pdf(
+    pdf_path: Path,
+    specialties: list[dict[str, Any]],
+    center_names: dict[str, str],
+) -> dict[str, Any]:
+    """Extract a difficult-coverage offer list without relying on ruled tables."""
+
+    items: list[list[Any]] = []
+    publication_date = ""
+    specialty_by_code = {str(item["code"]): dict(item) for item in specialties}
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_number, page in enumerate(pdf.pages, 1):
+            page_text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
+            if not publication_date:
+                date_match = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", page_text)
+                if date_match:
+                    publication_date = normalize_date(date_match.group(1))
+
+            bodies: list[tuple[float, str]] = []
+            page_specialties: list[tuple[float, str]] = []
+            provinces: list[tuple[float, str]] = []
+            boundaries: list[float] = []
+            for line in context_lines(page):
+                text = compact_text(line.get("text"))
+                top = float(line.get("top", 0))
+                normalized = text.upper()
+                if normalized.startswith("CUERPO/COS:"):
+                    bodies.append((top, text.split(":", 1)[1].strip()))
+                    boundaries.append(top)
+                elif normalized.startswith("ESPECIALIDAD/ESPECIALITAT:"):
+                    page_specialties.append((top, text.split(":", 1)[1].strip()))
+                    boundaries.append(top)
+                elif normalized.startswith(("PROVÍNCIA/PROVINCIA:", "PROVINCIA/PROVINCIA:")):
+                    provinces.append((top, text.split(":", 1)[1].strip()))
+                    boundaries.append(top)
+                elif re.match(r"^P[ÀA]G\b", normalized):
+                    boundaries.append(top)
+
+            words = page.extract_words(x_tolerance=1, y_tolerance=2)
+            slot_words = [
+                word
+                for word in words
+                if re.fullmatch(r"\d{5,7}", str(word.get("text", "")))
+                and 295 <= float(word["x0"]) <= 360
+                and 100 < float(word["top"]) < float(page.height) - 20
+            ]
+            row_tops = sorted({round(float(word["top"]), 2) for word in slot_words})
+            boundaries.extend(row_tops)
+
+            for word in slot_words:
+                row_top = float(word["top"])
+                slot_id = str(word["text"])
+                next_boundaries = [value for value in boundaries if value > row_top + 1]
+                row_bottom = min(next_boundaries) - 2 if next_boundaries else row_top + 38
+                row_bottom = min(row_bottom, row_top + 42)
+                crop_top = row_top - 3
+
+                center_cell = column_text(page, 20, 300, crop_top, row_bottom)
+                center_match = re.match(
+                    r"^(.+?)\s+-\s+(\d{8})\s+-\s+(.+)$",
+                    center_cell,
+                )
+                if not center_match:
+                    raise ValueError(
+                        f"Centro no reconocido en página {page_number}, puesto {slot_id}: "
+                        f"{center_cell!r}"
+                    )
+
+                body_raw = nearest_context(bodies, row_top, "cuerpo", page_number)
+                specialty_raw = nearest_context(
+                    page_specialties,
+                    row_top,
+                    "especialidad",
+                    page_number,
+                )
+                province_raw = nearest_context(provinces, row_top, "provincia", page_number)
+                specialty_code, specialty_name = parse_specialty(specialty_raw)
+                body = normalize_body(body_raw)
+                specialty_by_code.setdefault(
+                    specialty_code,
+                    SPECIALTY_OVERRIDES.get(
+                        specialty_code,
+                        {
+                            "code": specialty_code,
+                            "es": specialty_name.title(),
+                            "va": specialty_name.title(),
+                            "body": body,
+                        },
+                    ),
+                )
+
+                municipality = center_match.group(1).strip()
+                center_code = center_match.group(2)
+                extracted_center_name = center_match.group(3).strip()
+                hours_raw = column_text(page, 360, 402, crop_top, row_bottom)
+                itinerary_raw = column_text(page, 402, 445, crop_top, row_bottom)
+                placement_raw = column_text(page, 445, 512, crop_top, row_bottom)
+                requirement_raw = column_text(page, 512, 570, crop_top, row_bottom)
+                composition = column_text(page, 570, 650, crop_top, row_bottom)
+                observations = deduplicate_repeated_text(
+                    column_text(page, 650, 838, crop_top, row_bottom)
+                )
+
+                items.append(
+                    [
+                        len(items) + 1,
+                        body,
+                        specialty_code,
+                        normalize_province(province_raw),
+                        municipality,
+                        center_code,
+                        center_names.get(center_code, extracted_center_name),
+                        slot_id,
+                        parse_hours(hours_raw),
+                        bool(re.search(r"\bING(?:L[ÉE]S)?(?:\s*-?\s*B2)?\b", requirement_raw, re.IGNORECASE)),
+                        parse_yes_no(
+                            itinerary_raw,
+                            page_number=page_number,
+                            slot_id=slot_id,
+                        ),
+                        observations,
+                        normalize_placement(placement_raw),
+                        composition,
+                        True,
+                        publication_date,
+                        False,
+                    ]
+                )
+
+    if not publication_date:
+        raise ValueError("No se ha encontrado la fecha del listado de difícil cobertura")
+    if not items:
+        raise ValueError("No se ha extraído ningún puesto de difícil cobertura")
+
+    slot_ids = [str(item[7]) for item in items]
+    if len(slot_ids) != len(set(slot_ids)):
+        raise ValueError("Hay identificadores Lloc duplicados en difícil cobertura")
+
+    return build_payload(
+        specialties=sorted(
+            specialty_by_code.values(),
+            key=lambda item: (str(item.get("body", "")), str(item["code"])),
+        ),
+        academic_year=academic_year_for(publication_date),
+        status="published",
+        publication_date=publication_date,
+        source={
+            "filename": pdf_path.name,
+            "sha256": hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+            "kind": "difficult",
+        },
+        items=items,
+        snapshots={
+            "difficult": {
+                "publication_date": publication_date,
+                "source": {
+                    "filename": pdf_path.name,
+                    "sha256": hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+                },
+            }
+        },
+    )
+
+
 def build_payload(
     *,
     specialties: list[dict[str, Any]],
@@ -307,17 +525,25 @@ def build_payload(
     publication_date: str | None,
     source: dict[str, Any] | None,
     items: list[list[Any]],
+    snapshots: dict[str, Any] | None = None,
+    reconciliation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "dataset": DATASET,
         "update_mode": UPDATE_MODE,
-        "replacement_policy": "El PDF más reciente sustituye por completo el listado anterior.",
+        "replacement_policy": (
+            "Cada nueva publicación sustituye la instantánea anterior de su mismo tipo. "
+            "Las plazas ordinarias no cubiertas se conservan hasta la siguiente publicación "
+            "de puestos. Las plazas de difícil cobertura caducan al cambiar el día."
+        ),
         "academic_year": academic_year,
         "status": status,
         "publication_date": publication_date,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source": source,
+        "snapshots": snapshots or {},
+        "reconciliation": reconciliation,
         "specialties": specialties,
         "item_fields": ITEM_FIELDS,
         "items": items,

@@ -131,34 +131,45 @@ function recoveryGithub(now, conclusion = "success") {
 }
 
 test("vigila julio a diario por posiciones y agosto salvo domingos", () => {
-  assert.equal(shouldMonitor(new Date("2026-07-15T12:00:00Z"), "schedule"), true);
-  assert.equal(shouldMonitor(new Date("2026-08-15T12:00:00Z"), "schedule"), true);
-  assert.equal(shouldMonitor(new Date("2026-08-16T12:00:00Z"), "schedule"), false);
+  assert.equal(shouldMonitor(new Date("2026-07-15T07:30:00Z"), "schedule"), true);
+  assert.equal(shouldMonitor(new Date("2026-08-15T07:30:00Z"), "schedule"), true);
+  assert.equal(shouldMonitor(new Date("2026-08-16T07:30:00Z"), "schedule"), false);
 });
 
 test("calcula las fuentes activas de cada fecha", () => {
   assert.deepEqual(
-    calendarModes(new Date("2026-07-17T12:00:00Z")),
-    ["inicio", "posiciones", "acreditaciones"]
+    calendarModes(new Date("2026-07-17T10:00:00Z")),
+    ["inicio", "acreditaciones"]
   );
   assert.deepEqual(calendarModes(new Date("2026-09-04T12:00:00Z")), ["acreditaciones"]);
 });
 
 test("de septiembre a junio vigila adjudicaciones y puestos ofertados", () => {
-  assert.equal(shouldMonitor(new Date("2026-09-01T12:00:00Z"), "schedule"), true);
-  assert.equal(shouldMonitor(new Date("2026-09-03T12:00:00Z"), "schedule"), true);
-  assert.equal(shouldMonitor(new Date("2026-09-02T12:00:00Z"), "schedule"), true);
-  assert.deepEqual(calendarModes(new Date("2026-09-02T12:00:00Z")), ["puestos"]);
+  assert.equal(shouldMonitor(new Date("2026-09-01T10:30:00Z"), "schedule"), true);
+  assert.equal(shouldMonitor(new Date("2026-09-03T10:30:00Z"), "schedule"), true);
+  assert.equal(shouldMonitor(new Date("2026-09-02T09:30:00Z"), "schedule"), true);
+  assert.deepEqual(calendarModes(new Date("2026-09-02T09:30:00Z")), ["puestos"]);
 });
 
 test("los puestos ofertados terminan el uno de julio", () => {
   assert.deepEqual(
-    calendarModes(new Date("2026-07-01T12:00:00Z")),
+    calendarModes(new Date("2026-07-01T07:00:00Z")),
     ["inicio", "posiciones", "puestos"]
   );
   assert.deepEqual(
-    calendarModes(new Date("2026-07-08T12:00:00Z")),
+    calendarModes(new Date("2026-07-08T07:00:00Z")),
     ["inicio", "posiciones"]
+  );
+});
+
+test("vigila dificil cobertura hasta las 23 y la retira al cambiar de dia", () => {
+  assert.deepEqual(
+    calendarModes(new Date("2026-09-04T21:30:00Z")),
+    ["dificil"]
+  );
+  assert.deepEqual(
+    calendarModes(new Date("2026-09-04T22:30:00Z")),
+    ["limpieza_puestos"]
   );
 });
 

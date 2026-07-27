@@ -28,6 +28,7 @@ from offered_positions import (
     compact_text,
     load_center_names,
     load_specialties,
+    parse_difficult_pdf,
     parse_pdf,
 )
 
@@ -35,6 +36,10 @@ from offered_positions import (
 PAGE_URL = (
     "https://ceice.gva.es/es/web/rrhh-educacion/"
     "convocatoria-y-peticion-telematica"
+)
+DIFFICULT_PAGE_URL = (
+    "https://ceice.gva.es/es/web/rrhh-educacion/"
+    "convocatoria-y-peticion-telematica6"
 )
 DEFAULT_OUTPUT = Path("data/puestos_ofertados.json")
 DEFAULT_SPECIALTIES = Path("data/posiciones_bolsa.json")
@@ -285,6 +290,299 @@ def load_existing(path: Path) -> dict:
     return payload
 
 
+def item_as_dict(row: list, fields: list[str], publication_date: object = None) -> dict:
+    values = {field: row[index] for index, field in enumerate(fields) if index < len(row)}
+    values.setdefault("composition", "")
+    values.setdefault("difficult_coverage", False)
+    values.setdefault("snapshot_date", str(publication_date or ""))
+    values.setdefault("retained_unfilled", False)
+    return values
+
+
+def item_as_row(values: dict) -> list:
+    return [values.get(field) for field in ITEM_FIELDS]
+
+
+def canonical_items(payload: dict) -> list[list]:
+    fields = [str(value) for value in payload.get("item_fields") or []]
+    if not fields:
+        fields = ITEM_FIELDS[:13]
+    publication_date = payload.get("publication_date")
+    return [
+        item_as_row(item_as_dict(row, fields, publication_date))
+        for row in payload.get("items") or []
+        if isinstance(row, list)
+    ]
+
+
+def item_key(row: list) -> tuple[str, str, str]:
+    values = item_as_dict(row, ITEM_FIELDS)
+    return (
+        str(values.get("slot_id") or ""),
+        str(values.get("center_code") or ""),
+        str(values.get("specialty_code") or ""),
+    )
+
+
+def payload_snapshots(payload: dict) -> dict:
+    snapshots = payload.get("snapshots")
+    if isinstance(snapshots, dict):
+        return json.loads(json.dumps(snapshots))
+    source = payload.get("source")
+    if isinstance(source, dict) and payload.get("publication_date"):
+        return {
+            "ordinary": {
+                "publication_date": payload.get("publication_date"),
+                "source": json.loads(json.dumps(source)),
+            }
+        }
+    return {}
+
+
+def snapshot_date(snapshot: object) -> date | None:
+    if not isinstance(snapshot, dict):
+        return None
+    return parse_iso_date(snapshot.get("publication_date"))
+
+
+def rebuild_payload(
+    *,
+    base: dict,
+    specialties: list[dict],
+    academic_year: str,
+    items: list[list],
+    snapshots: dict,
+    reconciliation: dict | None = None,
+) -> dict:
+    deduplicated: dict[tuple[str, str, str], list] = {}
+    # A difficult-coverage publication wins when the same Lloc is present in
+    # both feeds, because it describes the position's current offering route.
+    ordered = sorted(
+        items,
+        key=lambda row: bool(item_as_dict(row, ITEM_FIELDS).get("difficult_coverage")),
+    )
+    for row in ordered:
+        deduplicated[item_key(row)] = row
+    merged = list(deduplicated.values())
+    merged.sort(
+        key=lambda row: (
+            bool(item_as_dict(row, ITEM_FIELDS).get("difficult_coverage")),
+            str(item_as_dict(row, ITEM_FIELDS).get("province") or ""),
+            str(item_as_dict(row, ITEM_FIELDS).get("specialty_code") or ""),
+            str(item_as_dict(row, ITEM_FIELDS).get("center_code") or ""),
+            str(item_as_dict(row, ITEM_FIELDS).get("slot_id") or ""),
+        )
+    )
+    for order, row in enumerate(merged, 1):
+        row[ITEM_FIELDS.index("offer_order")] = order
+
+    dated_snapshots = [
+        (value.get("publication_date"), value.get("source"))
+        for value in snapshots.values()
+        if isinstance(value, dict) and parse_iso_date(value.get("publication_date"))
+    ]
+    dated_snapshots.sort(key=lambda value: str(value[0]))
+    publication_date = dated_snapshots[-1][0] if dated_snapshots else None
+    source = dated_snapshots[-1][1] if dated_snapshots else None
+    status = "published" if snapshots else "awaiting_first_continuous_adjudication"
+    payload = build_payload(
+        specialties=specialties,
+        academic_year=academic_year,
+        status=status,
+        publication_date=publication_date,
+        source=source if isinstance(source, dict) else None,
+        items=merged,
+        snapshots=snapshots,
+        reconciliation=reconciliation,
+    )
+    if base.get("reconciliation_history"):
+        payload["reconciliation_history"] = base["reconciliation_history"]
+    return payload
+
+
+def merge_snapshot(existing: dict, parsed: dict, kind: str) -> dict:
+    academic_year = str(parsed["academic_year"])
+    same_year = existing.get("academic_year") == academic_year
+    current_items = canonical_items(existing) if same_year else []
+    snapshots = payload_snapshots(existing) if same_year else {}
+    replacing_difficult = kind == "difficult"
+    preserved = [
+        row
+        for row in current_items
+        if bool(item_as_dict(row, ITEM_FIELDS).get("difficult_coverage"))
+        != replacing_difficult
+    ]
+
+    incoming: list[list] = []
+    for row in canonical_items(parsed):
+        values = item_as_dict(row, ITEM_FIELDS, parsed.get("publication_date"))
+        values["difficult_coverage"] = replacing_difficult
+        values["snapshot_date"] = str(parsed.get("publication_date") or "")
+        values["retained_unfilled"] = False
+        incoming.append(item_as_row(values))
+
+    snapshots[kind] = {
+        "publication_date": parsed.get("publication_date"),
+        "source": json.loads(json.dumps(parsed.get("source") or {})),
+        "items": len(incoming),
+    }
+    specialties_by_code = {
+        str(item.get("code")): dict(item)
+        for item in (existing.get("specialties") if same_year else []) or []
+        if isinstance(item, dict) and item.get("code")
+    }
+    specialties_by_code.update(
+        {
+            str(item.get("code")): dict(item)
+            for item in parsed.get("specialties") or []
+            if isinstance(item, dict) and item.get("code")
+        }
+    )
+    return rebuild_payload(
+        base=existing,
+        specialties=sorted(
+            specialties_by_code.values(),
+            key=lambda item: (str(item.get("body", "")), str(item.get("code", ""))),
+        ),
+        academic_year=academic_year,
+        items=preserved + incoming,
+        snapshots=snapshots,
+        reconciliation=(existing.get("reconciliation") if kind == "difficult" else None),
+    )
+
+
+def prune_expired_difficult(payload: dict, current_date: date) -> tuple[dict, int]:
+    if payload.get("dataset") != DATASET:
+        return payload, 0
+    current_items = canonical_items(payload)
+    retained: list[list] = []
+    removed = 0
+    for row in current_items:
+        values = item_as_dict(row, ITEM_FIELDS, payload.get("publication_date"))
+        difficult = values.get("difficult_coverage") is True
+        item_date = parse_iso_date(values.get("snapshot_date"))
+        if difficult and item_date != current_date:
+            removed += 1
+            continue
+        retained.append(item_as_row(values))
+    if not removed:
+        return payload, 0
+
+    snapshots = payload_snapshots(payload)
+    difficult_snapshot = snapshots.get("difficult")
+    if snapshot_date(difficult_snapshot) != current_date:
+        snapshots.pop("difficult", None)
+    rebuilt = rebuild_payload(
+        base=payload,
+        specialties=list(payload.get("specialties") or []),
+        academic_year=str(payload.get("academic_year") or ""),
+        items=retained,
+        snapshots=snapshots,
+        reconciliation=payload.get("reconciliation"),
+    )
+    return rebuilt, removed
+
+
+def normalized_slot(value: object) -> str:
+    digits = re.sub(r"\D", "", str(value or ""))
+    return digits.lstrip("0") or ("0" if digits else "")
+
+
+def reconcile_after_adjudication(
+    *,
+    output: Path,
+    assignments: list[object],
+    academic_year: str,
+    adjudication_date: str,
+) -> dict:
+    """Remove filled Lloc identifiers and retain only genuinely unfilled offers."""
+
+    existing = load_existing(output)
+    if existing.get("academic_year") != academic_year or existing.get("dataset") != DATASET:
+        return {"removed": 0, "remaining": 0, "result": "different_academic_year"}
+
+    filled = {
+        (
+            normalized_slot(getattr(item, "slot_id", "")),
+            str(getattr(item, "center_code", "")),
+            str(getattr(item, "specialty_code", "")),
+        )
+        for item in assignments
+        if normalized_slot(getattr(item, "slot_id", ""))
+    }
+    if not filled:
+        return {
+            "removed": 0,
+            "remaining": len(existing.get("items") or []),
+            "result": "no_slot_identifiers",
+        }
+
+    retained: list[list] = []
+    removed_rows: list[dict] = []
+    for row in canonical_items(existing):
+        values = item_as_dict(row, ITEM_FIELDS, existing.get("publication_date"))
+        key = (
+            normalized_slot(values.get("slot_id")),
+            str(values.get("center_code") or ""),
+            str(values.get("specialty_code") or ""),
+        )
+        if key in filled:
+            removed_rows.append(
+                {
+                    "slot_id": str(values.get("slot_id") or ""),
+                    "center_code": str(values.get("center_code") or ""),
+                    "specialty_code": str(values.get("specialty_code") or ""),
+                    "difficult_coverage": values.get("difficult_coverage") is True,
+                }
+            )
+            continue
+        values["retained_unfilled"] = True
+        retained.append(item_as_row(values))
+
+    if not removed_rows and all(
+        item_as_dict(row, ITEM_FIELDS).get("retained_unfilled") is True
+        for row in retained
+    ):
+        return {
+            "removed": 0,
+            "remaining": len(retained),
+            "result": "unchanged",
+        }
+
+    reconciliation = {
+        "adjudication_date": adjudication_date,
+        "processed_at": datetime.now(MADRID).isoformat(timespec="seconds"),
+        "filled_removed": len(removed_rows),
+        "remaining_unfilled": len(retained),
+        "removed": removed_rows,
+    }
+    history = list(existing.get("reconciliation_history") or [])
+    history = [
+        item
+        for item in history
+        if not (
+            isinstance(item, dict)
+            and item.get("adjudication_date") == adjudication_date
+        )
+    ]
+    history.append(reconciliation)
+    rebuilt = rebuild_payload(
+        base=existing,
+        specialties=list(existing.get("specialties") or []),
+        academic_year=academic_year,
+        items=retained,
+        snapshots=payload_snapshots(existing),
+        reconciliation=reconciliation,
+    )
+    rebuilt["reconciliation_history"] = history[-60:]
+    atomic_write_json(output, rebuilt)
+    return {
+        "removed": len(removed_rows),
+        "remaining": len(retained),
+        "result": "updated",
+    }
+
+
 def validate_payload(payload: dict, target_year: str) -> None:
     if payload.get("dataset") != DATASET or payload.get("update_mode") != UPDATE_MODE:
         raise SourceValidationError("El PDF no ha producido el dataset esperado")
@@ -349,6 +647,7 @@ def parse_downloaded_pdf(
     page_url: str,
     specialties: list[dict],
     center_names: dict[str, str],
+    kind: str = "ordinary",
 ) -> dict:
     if not content.lstrip().startswith(b"%PDF-"):
         raise SourceValidationError(
@@ -360,7 +659,8 @@ def parse_downloaded_pdf(
         with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=suffix) as handle:
             handle.write(content)
             temporary = Path(handle.name)
-        payload = parse_pdf(temporary, specialties, center_names)
+        parser = parse_difficult_pdf if kind == "difficult" else parse_pdf
+        payload = parser(temporary, specialties, center_names)
     except Exception as error:
         if isinstance(error, SourceValidationError):
             raise
@@ -380,18 +680,25 @@ def parse_downloaded_pdf(
         "url": link.get("url", ""),
         "filename": candidate_filename(link),
         "sha256": hashlib.sha256(content).hexdigest(),
+        "kind": kind,
     }
     if link.get("text"):
         payload["source"]["link_text"] = compact_text(link["text"])
     return payload
 
 
-def should_publish(existing: dict, payload: dict) -> bool:
-    existing_source = existing.get("source") if isinstance(existing.get("source"), dict) else {}
+def should_publish(existing: dict, payload: dict, kind: str) -> bool:
+    existing_snapshot = payload_snapshots(existing).get(kind)
+    existing_source = (
+        existing_snapshot.get("source")
+        if isinstance(existing_snapshot, dict)
+        and isinstance(existing_snapshot.get("source"), dict)
+        else {}
+    )
     new_source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     if existing_source.get("sha256") == new_source.get("sha256"):
         return False
-    existing_date = parse_iso_date(existing.get("publication_date"))
+    existing_date = snapshot_date(existing_snapshot)
     new_date = parse_iso_date(payload.get("publication_date"))
     if existing.get("academic_year") == payload.get("academic_year"):
         if existing_date and new_date and new_date < existing_date:
@@ -406,11 +713,17 @@ def update_from_page(
     specialties_path: Path,
     centers_path: Path,
     target_year: str,
+    kind: str = "ordinary",
+    current_date: date | None = None,
     fetch: Callable[[str], bytes] = http_get,
 ) -> dict:
+    if kind not in {"ordinary", "difficult"}:
+        raise ValueError(f"Tipo de puestos no reconocido: {kind}")
+    current_date = current_date or datetime.now(MADRID).date()
     specialties = load_specialties(specialties_path)
     center_names = load_center_names(centers_path)
     existing = load_existing(output)
+    existing, expired_count = prune_expired_difficult(existing, current_date)
     page_html = fetch(page_url)
     links = offered_position_links(page_html, page_url)
     candidates = links_for_latest_target_document(links, target_year)
@@ -419,7 +732,12 @@ def update_from_page(
     for link in candidates:
         try:
             payload = parse_downloaded_pdf(
-                fetch(link["url"]), link, page_url, specialties, center_names
+                fetch(link["url"]),
+                link,
+                page_url,
+                specialties,
+                center_names,
+                kind,
             )
             if payload.get("academic_year") != target_year:
                 hint = document_date_hint(link)
@@ -429,24 +747,32 @@ def update_from_page(
                     )
                 continue
             validate_payload(payload, target_year)
+            if kind == "difficult" and parse_iso_date(payload.get("publication_date")) != current_date:
+                continue
         except SourceValidationError as error:
             errors.append(str(error))
             continue
 
-        if should_publish(existing, payload):
-            atomic_write_json(output, payload)
+        if should_publish(existing, payload, kind):
+            merged = merge_snapshot(existing, payload, kind)
+            atomic_write_json(output, merged)
             return {
                 "result": "updated",
                 "target_year": target_year,
                 "publication_date": payload["publication_date"],
-                "items": len(payload["items"]),
+                "items": len(merged["items"]),
+                "snapshot_items": len(payload["items"]),
+                "kind": kind,
                 "source": payload["source"]["url"],
             }
+        if expired_count:
+            atomic_write_json(output, existing)
         return {
             "result": "unchanged",
             "target_year": target_year,
             "publication_date": payload["publication_date"],
             "items": len(payload["items"]),
+            "kind": kind,
             "source": payload["source"]["url"],
         }
 
@@ -456,7 +782,7 @@ def update_from_page(
         if (hint := document_date_hint(link))
         and academic_year_for_document(hint) == target_year
     ]
-    if candidates and (target_hints or errors):
+    if kind != "difficult" and candidates and (target_hints or errors):
         raise SourceValidationError(
             "No se ha podido procesar el PDF mas reciente de puestos ofertados: "
             + " | ".join(errors or ["documento no valido"])
@@ -466,6 +792,9 @@ def update_from_page(
         payload = empty_payload(specialties, target_year)
         atomic_write_json(output, payload)
         result = "new_academic_year_without_offers"
+    elif expired_count:
+        atomic_write_json(output, existing)
+        result = "expired_difficult_positions"
     else:
         result = "no_current_document"
     return {
@@ -473,6 +802,8 @@ def update_from_page(
         "target_year": target_year,
         "publication_date": None,
         "items": 0,
+        "kind": kind,
+        "expired": expired_count,
         "source": None,
     }
 
@@ -493,7 +824,18 @@ def parse_args() -> argparse.Namespace:
             "las adjudicaciones continuas."
         )
     )
-    parser.add_argument("--page-url", default=PAGE_URL)
+    parser.add_argument(
+        "--mode",
+        choices=("ordinary", "difficult"),
+        default="ordinary",
+        help="Tipo de publicación que se debe sustituir.",
+    )
+    parser.add_argument("--page-url", default="")
+    parser.add_argument(
+        "--expire-difficult",
+        action="store_true",
+        help="Retira los puestos de difícil cobertura al cambiar su fecha de publicación.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--specialties", type=Path, default=DEFAULT_SPECIALTIES)
     parser.add_argument("--centers", type=Path, default=DEFAULT_CENTERS)
@@ -512,12 +854,33 @@ def main() -> int:
     target_year = args.school_year or academic_year_for_check(current_date)
     if not valid_academic_year(target_year):
         raise ValueError("El curso debe tener el formato 2026-2027")
+    if args.expire_difficult:
+        existing = load_existing(args.output)
+        updated, removed = prune_expired_difficult(existing, current_date)
+        if removed:
+            atomic_write_json(args.output, updated)
+        print(
+            json.dumps(
+                {
+                    "result": "expired_difficult_positions" if removed else "unchanged",
+                    "removed": removed,
+                    "target_year": target_year,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    page_url = args.page_url or (
+        DIFFICULT_PAGE_URL if args.mode == "difficult" else PAGE_URL
+    )
     result = update_from_page(
-        page_url=args.page_url,
+        page_url=page_url,
         output=args.output,
         specialties_path=args.specialties,
         centers_path=args.centers,
         target_year=target_year,
+        kind=args.mode,
+        current_date=current_date,
     )
     print(json.dumps(result, ensure_ascii=False))
     return 0

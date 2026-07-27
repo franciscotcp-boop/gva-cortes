@@ -67,6 +67,24 @@ class AutomationScheduleTests(unittest.TestCase):
         )
         self.assertNotIn("puestos", scheduled_modes(local("2026-07-08T09:00:00")))
 
+    def test_difficult_coverage_runs_friday_until_2320(self) -> None:
+        self.assertEqual(
+            scheduled_modes(local("2026-09-04T23:20:00")),
+            ("dificil",),
+        )
+        self.assertNotIn(
+            "dificil", scheduled_modes(local("2026-09-05T23:20:00"))
+        )
+        self.assertNotIn(
+            "dificil", scheduled_modes(local("2027-07-02T11:20:00"))
+        )
+
+    def test_difficult_coverage_is_cleaned_at_the_start_of_saturday(self) -> None:
+        self.assertEqual(
+            scheduled_modes(local("2026-09-05T00:20:00")),
+            ("limpieza_puestos",),
+        )
+
     def test_force_modes_are_independent_from_calendar(self) -> None:
         moment = local("2026-08-02T03:00:00")
         self.assertEqual(selected_modes("all", moment), ALL_MODES)
