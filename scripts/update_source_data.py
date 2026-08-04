@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import difflib
 import gzip
 import hashlib
 import html.parser
@@ -62,6 +63,39 @@ MASTER_CODES = frozenset({"120", "121", "122", "123", "124", "126", "127", "128"
 PROVINCES = ("alicante", "valencia", "castellon")
 PROVINCE_BY_PREFIX = {"03": 0, "46": 1, "12": 2}
 VALID_LEVELS = {"B2": 2, "C1": 3, "C2": 4}
+OCR_LEVEL_ALIASES = {
+    "B2": "B2",
+    "82": "B2",
+    "BZ": "B2",
+    "C1": "C1",
+    "CI": "C1",
+    "CL": "C1",
+    "C2": "C2",
+    "CZ": "C2",
+}
+OCR_NAME_CONNECTORS = frozenset(
+    {"A", "D", "DA", "DAS", "DE", "DEL", "DELA", "DO", "DOS", "E", "EL", "I", "LA", "LAS", "LOS", "Y"}
+)
+OCR_HEADER_WORDS = frozenset(
+    {
+        "ACREDITACION",
+        "ACREDITATS",
+        "ACREDITADOS",
+        "APELLIDO",
+        "APELLIDO1",
+        "APELLIDO2",
+        "COGNOM",
+        "COGNOM1",
+        "COGNOM2",
+        "IDIOMA",
+        "LLENGUA",
+        "MOTIVOS",
+        "NIVEL",
+        "NIVELL",
+        "NOMBRE",
+        "NOM",
+    }
+)
 POSITION_FIELDS = [
     "specialty_code",
     "position_at_course_start",
@@ -1084,6 +1118,240 @@ def rows_from_accreditation_table(
     return output
 
 
+def ocr_level(value: object) -> str | None:
+    return OCR_LEVEL_ALIASES.get(normalize_name(str(value or "")).replace(" ", ""))
+
+
+def ocr_is_english(value: object) -> bool:
+    token = normalize_name(str(value or "")).replace(" ", "")
+    if any(language in token for language in ("FRANC", "ALEMAN", "ITALIAN", "PORTUG")):
+        return False
+    return any(language in token for language in ("ANGL", "INGL", "NGLES", "ENGLISH"))
+
+
+def clean_ocr_name_words(words: Iterable[dict]) -> str:
+    pieces = []
+    for word in sorted(words, key=lambda item: (float(item["x"]), float(item["y"]))):
+        raw = str(word.get("text") or "").strip().strip(".,;:()[]{}")
+        token = normalize_name(raw)
+        if not token or token in OCR_HEADER_WORDS or any(character.isdigit() for character in raw):
+            continue
+        if len(token) == 1 and token not in OCR_NAME_CONNECTORS:
+            continue
+        pieces.append(raw)
+    return clean(" ".join(pieces))
+
+
+def rows_from_accreditation_ocr_words(
+    words: list[dict],
+    page_width: float,
+    page_height: float,
+    province: str,
+    source: dict[str, str],
+) -> list[dict]:
+    prepared = []
+    for word in words:
+        text = str(word.get("text") or "").strip()
+        if not text:
+            continue
+        x = float(word.get("x", word.get("left", 0)) or 0)
+        y = float(word.get("y", word.get("top", 0)) or 0)
+        width = float(word.get("width", 0) or 0)
+        height = float(word.get("height", 0) or 0)
+        prepared.append(
+            {
+                "text": text,
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "cx": x + width / 2,
+                "cy": y + height / 2,
+            }
+        )
+
+    row_tolerance = max(8.0, min(32.0, page_height * 0.0075))
+    records = []
+    for level_word in prepared:
+        level = ocr_level(level_word["text"])
+        if level is None:
+            continue
+        english_words = [
+            word
+            for word in prepared
+            if ocr_is_english(word["text"])
+            and abs(word["cy"] - level_word["cy"]) <= row_tolerance
+            and word["cx"] < level_word["cx"]
+            and level_word["x"] - (word["x"] + word["width"]) < page_width * 0.2
+        ]
+        if not english_words:
+            continue
+        english_word = min(
+            english_words,
+            key=lambda word: (
+                abs(word["cy"] - level_word["cy"]),
+                abs(level_word["x"] - (word["x"] + word["width"])),
+            ),
+        )
+        same_row = [
+            word
+            for word in prepared
+            if abs(word["cy"] - level_word["cy"]) <= row_tolerance
+        ]
+        if any(
+            word["x"] > level_word["x"] + level_word["width"] + page_width * 0.015
+            and normalize_name(word["text"])
+            for word in same_row
+        ):
+            continue
+
+        first_cut = english_word["x"] * 0.31
+        second_cut = english_word["x"] * 0.57
+        name_words = [
+            word
+            for word in same_row
+            if word["cx"] < english_word["x"] - max(2.0, page_width * 0.001)
+        ]
+        surname1 = clean_ocr_name_words([word for word in name_words if word["cx"] < first_cut])
+        surname2 = clean_ocr_name_words(
+            [word for word in name_words if first_cut <= word["cx"] < second_cut]
+        )
+        given = clean_ocr_name_words([word for word in name_words if word["cx"] >= second_cut])
+        if not surname1 or not surname2 or not given:
+            continue
+        official = clean_official_name(f"{surname1} {surname2}, {given}")
+        records.append(
+            {
+                "official_name": official,
+                "display_name": display_name(official),
+                "level": level,
+                "province": province,
+                "date": source.get("date"),
+                "academic_year": source.get("academic_year"),
+                "source_url": source.get("url"),
+            }
+        )
+    unique = {}
+    for record in records:
+        unique[(identity_key(record["official_name"]), record["level"])] = record
+    return list(unique.values())
+
+
+def rows_from_scanned_accreditation_pdf(
+    pdf_bytes: bytes, province: str, source: dict[str, str]
+) -> list[dict]:
+    import pypdfium2 as pdfium
+    import pytesseract
+    from PIL import ImageOps
+
+    document = pdfium.PdfDocument(pdf_bytes)
+    records = []
+    try:
+        for page_index in range(len(document)):
+            page = document[page_index]
+            bitmap = page.render(scale=3.0)
+            try:
+                image = ImageOps.autocontrast(ImageOps.grayscale(bitmap.to_pil()), cutoff=1)
+                data = pytesseract.image_to_data(
+                    image,
+                    lang=os.environ.get("ACCREDITATION_OCR_LANGUAGES", "spa+eng"),
+                    config="--psm 11",
+                    output_type=pytesseract.Output.DICT,
+                )
+                words = []
+                for index, text in enumerate(data.get("text", [])):
+                    try:
+                        confidence = float(data.get("conf", [0])[index])
+                    except (TypeError, ValueError):
+                        confidence = 0
+                    if str(text or "").strip() and confidence >= 10:
+                        words.append(
+                            {
+                                "text": text,
+                                "x": data["left"][index],
+                                "y": data["top"][index],
+                                "width": data["width"][index],
+                                "height": data["height"][index],
+                            }
+                        )
+                records.extend(
+                    rows_from_accreditation_ocr_words(
+                        words,
+                        float(image.width),
+                        float(image.height),
+                        province,
+                        source,
+                    )
+                )
+            finally:
+                bitmap.close()
+                page.close()
+    finally:
+        document.close()
+    return records
+
+
+def accreditation_token_bag(value: str) -> str:
+    return " ".join(sorted(normalize_name(value).split()))
+
+
+def accreditation_name_parts(value: str) -> tuple[str | None, str | None]:
+    if "," not in value:
+        return None, None
+    surnames, given = value.split(",", 1)
+    surname_tokens = normalize_name(surnames).split()
+    given_tokens = normalize_name(given).split()
+    return (
+        surname_tokens[0] if surname_tokens else None,
+        given_tokens[0] if given_tokens else None,
+    )
+
+
+def canonicalize_accreditation_records(records: list[dict], positions: dict) -> list[dict]:
+    names = sorted(
+        {
+            str(person[1])
+            for person in positions.get("people", [])
+            if len(person) > 4 and isinstance(person[4], list)
+        }
+    )
+    exact: dict[str, list[str]] = defaultdict(list)
+    candidates: dict[tuple[str | None, str | None], list[str]] = defaultdict(list)
+    for name in names:
+        exact[accreditation_token_bag(name)].append(name)
+        candidates[accreditation_name_parts(name)].append(name)
+
+    output = []
+    for source_record in records:
+        record = dict(source_record)
+        raw_name = str(record.get("official_name") or "")
+        matching = exact.get(accreditation_token_bag(raw_name), [])
+        canonical = matching[0] if len(matching) == 1 else None
+        if canonical is None:
+            scored = sorted(
+                (
+                    (
+                        difflib.SequenceMatcher(
+                            None, normalize_name(raw_name), normalize_name(candidate)
+                        ).ratio(),
+                        candidate,
+                    )
+                    for candidate in candidates.get(accreditation_name_parts(raw_name), [])
+                ),
+                reverse=True,
+            )
+            if scored:
+                best_score, best_name = scored[0]
+                runner_score = scored[1][0] if len(scored) > 1 else 0.0
+                if best_score >= 0.94 and best_score - runner_score >= 0.03:
+                    canonical = best_name
+        if canonical:
+            record["official_name"] = canonical
+            record["display_name"] = display_name(canonical)
+        output.append(record)
+    return output
+
+
 def parse_accreditation_pdf(
     pdf_bytes: bytes, province: str, source: dict[str, str]
 ) -> list[dict]:
@@ -1092,6 +1360,8 @@ def parse_accreditation_pdf(
         for page in pdf.pages:
             for table in page.extract_tables() or []:
                 records.extend(rows_from_accreditation_table(table, province, source))
+    if not records:
+        records.extend(rows_from_scanned_accreditation_pdf(pdf_bytes, province, source))
     unique = {}
     for record in records:
         key = (identity_key(record["official_name"]), record["level"])
@@ -1372,6 +1642,7 @@ def run_accreditations(
     today: date,
 ) -> bool:
     payload = load_json(accreditations_path)
+    positions = load_json(positions_path)
     processed_urls = {item.get("url") for item in payload.get("processed_documents", [])}
     links = preferred_accreditation_links(crawl_accreditation_links(today))
     fresh = [link for link in links if link.get("url") not in processed_urls]
@@ -1380,13 +1651,18 @@ def run_accreditations(
         return False
     records: list[dict] = []
     documents: list[dict] = []
+    failures: list[str] = []
     for link in fresh:
         pdf_bytes = http_get(link["url"])
         parsed = parse_accreditation_pdf(pdf_bytes, link["province"], link)
         if not parsed:
-            raise SourceValidationError(
-                f"No se extrajo ninguna acreditacion inglesa B2/C1/C2 de {link['url']}"
+            failures.append(link["url"])
+            print(
+                f"acreditaciones: no se extrajeron filas inglesas B2/C1/C2 de {link['url']}",
+                file=sys.stderr,
             )
+            continue
+        parsed = canonicalize_accreditation_records(parsed, positions)
         records.extend(parsed)
         documents.append(
             {
@@ -1400,7 +1676,6 @@ def run_accreditations(
             }
         )
     changed = merge_accreditations(payload, records, documents)
-    positions = load_json(positions_path)
     positions_changed = recalculate_english_positions(positions, payload)
     if changed:
         save_json_atomic(accreditations_path, payload)
@@ -1412,6 +1687,10 @@ def run_accreditations(
     print(
         f"acreditaciones: {len(documents)} documentos, {len(records)} filas y {len(payload['records'])} personas acumuladas"
     )
+    if failures:
+        raise SourceValidationError(
+            "No se pudieron validar algunos PDFs de acreditaciones: " + ", ".join(failures)
+        )
     return changed or positions_changed
 
 

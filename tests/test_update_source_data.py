@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from update_source_data import (
     Adjudication,
     allowed_accreditation_years,
+    canonicalize_accreditation_records,
     detection_block,
     enrich_status_details_and_context,
     merge_accreditations,
@@ -22,6 +23,7 @@ from update_source_data import (
     preferred_accreditation_links,
     recalculate_english_positions,
     rows_from_accreditation_table,
+    rows_from_accreditation_ocr_words,
     save_json_atomic,
     select_position_pair,
 )
@@ -153,6 +155,66 @@ class AccreditationParserTests(unittest.TestCase):
         rows = rows_from_accreditation_table(table, "Valencia", source)
         self.assertEqual([row["official_name"] for row in rows], ["LOPEZ GARCIA, MARIA", "RUIZ MARTI, JOAN"])
         self.assertEqual([row["level"] for row in rows], ["B2", "C1"])
+
+    def test_scanned_table_reconstructs_columns_and_ignores_accents_for_matching(self) -> None:
+        words = [
+            {"text": "SANTO", "x": 50, "y": 300, "width": 90, "height": 20},
+            {"text": "ROCAMORA", "x": 250, "y": 300, "width": 120, "height": 20},
+            {"text": "MARIA", "x": 445, "y": 300, "width": 80, "height": 20},
+            {"text": "Ingles", "x": 770, "y": 300, "width": 75, "height": 20},
+            {"text": "B2", "x": 927, "y": 300, "width": 25, "height": 20},
+        ]
+        source = {
+            "url": "https://example.test/scanned.pdf",
+            "date": "2020-11-17",
+            "academic_year": "2020-2021",
+        }
+        rows = rows_from_accreditation_ocr_words(
+            words, 1786, 2526, "Alicante", source
+        )
+        self.assertEqual(rows[0]["official_name"], "SANTO ROCAMORA, MARIA")
+        positions = {
+            "people": [
+                [
+                    "Maria Santo Rocamora",
+                    "SANTO ROCAMORA, MARIA",
+                    [["128", 1, 1, 1, 1, None, None]],
+                    "maestros",
+                    [1, 1],
+                ],
+                [
+                    "Paula Serrano Alonso",
+                    "SERRANO ALONSO, PAULA",
+                    [["124", 2, 2, 2, 2, None, None]],
+                    "mixto",
+                    [2, 2],
+                ]
+            ]
+        }
+        canonical = canonicalize_accreditation_records(
+            [{**rows[0], "official_name": "SANTO ROCAMORA, MARIA"}], positions
+        )
+        self.assertEqual(canonical[0]["official_name"], "SANTO ROCAMORA, MARIA")
+        fuzzy = canonicalize_accreditation_records(
+            [{**rows[0], "official_name": "SERRANO LONSO, PAULA"}], positions
+        )
+        self.assertEqual(fuzzy[0]["official_name"], "SERRANO ALONSO, PAULA")
+
+    def test_scanned_table_excludes_rows_with_a_rejection_reason(self) -> None:
+        words = [
+            {"text": "PEREZ", "x": 50, "y": 300, "width": 80, "height": 20},
+            {"text": "SOLER", "x": 250, "y": 300, "width": 80, "height": 20},
+            {"text": "ANA", "x": 445, "y": 300, "width": 60, "height": 20},
+            {"text": "Angles", "x": 770, "y": 300, "width": 75, "height": 20},
+            {"text": "B2", "x": 927, "y": 300, "width": 25, "height": 20},
+            {"text": "Excluida", "x": 1050, "y": 300, "width": 100, "height": 20},
+        ]
+        self.assertEqual(
+            rows_from_accreditation_ocr_words(
+                words, 1786, 2526, "Alicante", {"url": "https://example.test/a.pdf"}
+            ),
+            [],
+        )
 
     def test_merge_is_cumulative_and_idempotent(self) -> None:
         payload = {
