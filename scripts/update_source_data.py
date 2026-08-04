@@ -58,7 +58,8 @@ DEFAULT_CUTS_PATH = Path("data/adjudicaciones.json")
 DEFAULT_ACCREDITATIONS_PATH = Path("data/english_accreditations.json.gz")
 DEFAULT_STATE_PATH = Path("data/source_monitor_state.json")
 DEFAULT_GENDER_PATH = Path("data/gender_first_name_map.json")
-ENGLISH_TARGET_CODES = ("120", "123", "124", "126", "127", "128", "153")
+MASTER_ENGLISH_TARGET_CODES = ("120", "123", "124", "126", "127", "128", "153")
+SECONDARY_ENGLISH_SPECIALTY_CODE = "211"
 MASTER_CODES = frozenset({"120", "121", "122", "123", "124", "126", "127", "128", "151", "152", "153"})
 PROVINCES = ("alicante", "valencia", "castellon")
 PROVINCE_BY_PREFIX = {"03": 0, "46": 1, "12": 2}
@@ -686,21 +687,34 @@ def infer_gender(official_name: str, gender_map: dict[str, str], previous: str |
     return "u"
 
 
-def add_english_positions(data: dict, accredited_names: set[str]) -> dict[str, int]:
-    state: dict[int, tuple[dict[str, list], bool, bool]] = {}
+def add_english_positions(
+    data: dict,
+    accredited_names: set[str],
+    secondary_target_codes: Iterable[str] | None = None,
+    secondary_accredited_names: set[str] | None = None,
+    secondary_assignment_confirmed_names: set[str] | None = None,
+) -> dict[str, dict[str, int]]:
+    if secondary_accredited_names is None:
+        secondary_accredited_names = accredited_names
+    secondary_eligible_names = set(secondary_accredited_names)
+    secondary_eligible_names.update(secondary_assignment_confirmed_names or set())
+    state: dict[int, tuple[dict[str, list], bool, bool, bool]] = {}
     for person_index, person in enumerate(data["people"]):
         positions = {str(position[0]): position for position in person[2]}
         is_master = isinstance(person[4], list)
-        if is_master:
-            state[person_index] = (
-                positions,
-                "121" in positions,
-                identity_key(person[1]) in accredited_names,
-            )
-    totals: dict[str, int] = {}
-    for code in ENGLISH_TARGET_CODES:
+        state[person_index] = (
+            positions,
+            is_master,
+            "121" in positions,
+            identity_key(person[1]) in accredited_names,
+        )
+
+    master_totals: dict[str, int] = {}
+    for code in MASTER_ENGLISH_TARGET_CODES:
         ordered = []
-        for person_index, (positions, has_121, accredited) in state.items():
+        for person_index, (positions, is_master, has_121, accredited) in state.items():
+            if not is_master:
+                continue
             position = positions.get(code)
             if not position or len(position) < 4 or position[3] is None:
                 continue
@@ -713,8 +727,63 @@ def add_english_positions(data: dict, accredited_names: set[str]) -> dict[str, i
                 continue
             rank += contribution
             state[person_index][0][code][6] = rank
-        totals[code] = rank
-    return totals
+        master_totals[code] = rank
+
+    if secondary_target_codes is None:
+        secondary_target_codes = data.get("english_requirement", {}).get(
+            "secondary_eligible_specialties", []
+        )
+    other_codes = {
+        str(item.get("code"))
+        for item in data.get("specialties", [])
+        if item.get("body") == "otros"
+    }
+    secondary_targets = sorted(
+        {
+            str(code)
+            for code in secondary_target_codes
+            if str(code) in other_codes
+            and str(code) != SECONDARY_ENGLISH_SPECIALTY_CODE
+        }
+    )
+    secondary_totals: dict[str, int] = {}
+    for code in secondary_targets:
+        ordered = []
+        for person_index, (positions, _is_master, _has_121, _accredited) in state.items():
+            position = positions.get(code)
+            if not position or len(position) < 4 or position[3] is None:
+                continue
+            has_211 = SECONDARY_ENGLISH_SPECIALTY_CODE in positions
+            accredited = identity_key(data["people"][person_index][1]) in secondary_eligible_names
+            if not (has_211 or accredited):
+                continue
+            ordered.append((int(position[3]), person_index))
+        ordered.sort()
+        for rank, (_order, person_index) in enumerate(ordered, start=1):
+            state[person_index][0][code][6] = rank
+        secondary_totals[code] = len(ordered)
+
+    return {"maestros": master_totals, "otros": secondary_totals}
+
+
+def secondary_english_assignment_names(
+    data: dict,
+    assignments: Iterable[Adjudication],
+) -> set[str]:
+    awarded_positions = {
+        (str(assignment.specialty_code), int(assignment.cut))
+        for assignment in assignments
+        if assignment.body == "secundaria" and assignment.english_requirement
+    }
+    confirmed = set()
+    for person in data.get("people", []):
+        for position in person[2]:
+            if len(position) <= 3 or position[3] is None:
+                continue
+            if (str(position[0]), int(position[3])) in awarded_positions:
+                confirmed.add(identity_key(person[1]))
+                break
+    return confirmed
 
 
 def center_lookup(cuts: dict) -> dict[str, tuple[str, str]]:
@@ -875,13 +944,17 @@ def last_awarded_rows(data: dict) -> dict:
         "secondary_rule": "Solo cuenta cuando coinciden la especialidad del encabezado y la plaza adjudicada",
         "masters_rule": "Se selecciona la mayor posicion adjudicada de cada especialidad",
         "masters_english_requirement_rule": "La marca procede del literal / ING. del bloque adjudicado",
+        "secondary_english_requirement_rule": "La marca procede del literal / ING. y solo se acepta cuando coinciden el encabezado y la especialidad adjudicada",
     }
 
 
-def accreditation_names(payload: dict) -> set[str]:
+def accreditation_names(payload: dict, positions: dict | None = None) -> set[str]:
+    records = payload.get("records", [])
+    if positions is not None:
+        records = canonicalize_accreditation_records(records, positions)
     return {
         identity_key(row.get("official_name", ""))
-        for row in payload.get("records", [])
+        for row in records
         if row.get("official_name")
     }
 
@@ -986,7 +1059,29 @@ def build_positions_dataset(
         "position_fields": list(POSITION_FIELDS),
         "people": people,
     }
-    totals = add_english_positions(dataset, accreditation_names(accreditations))
+    secondary_english_targets = sorted(
+        {
+            assignment.specialty_code
+            for assignment in assignments
+            if assignment.body == "secundaria"
+            and assignment.english_requirement
+            and assignment.specialty_code != SECONDARY_ENGLISH_SPECIALTY_CODE
+        }
+        or {
+            str(code)
+            for code in previous.get("english_requirement", {}).get(
+                "secondary_eligible_specialties", []
+            )
+        }
+    )
+    secondary_assignment_names = secondary_english_assignment_names(dataset, assignments)
+    totals = add_english_positions(
+        dataset,
+        accreditation_names(accreditations),
+        secondary_english_targets,
+        accreditation_names(accreditations, dataset),
+        secondary_assignment_names,
+    )
     enrich_status_details_and_context(
         dataset,
         master_rows,
@@ -998,12 +1093,22 @@ def build_positions_dataset(
     dataset["last_awarded_by_specialty"] = last_awarded_rows(dataset)
     dataset["english_requirement"] = {
         "body": "maestros",
+        "body_scope": ["maestros", "otros"],
         "excluded_specialty": "121",
-        "eligible_specialties": list(ENGLISH_TARGET_CODES),
+        "eligible_specialties": list(MASTER_ENGLISH_TARGET_CODES),
         "calculation": "En el orden vigente se acumula una entrada por habilitacion 121 y otra por acreditacion B2/C1/C2",
+        "secondary_excluded_specialty": SECONDARY_ENGLISH_SPECIALTY_CODE,
+        "secondary_eligible_specialties": secondary_english_targets,
+        "secondary_calculation": "En el orden vigente de cada especialidad se cuenta una vez a quien tenga la habilitacion 211, una acreditacion B2/C1/C2 o una adjudicacion / ING. que confirme el requisito",
+        "secondary_assignment_confirmed_names": sorted(secondary_assignment_names),
+        "secondary_assignment_confirmed_count": len(secondary_assignment_names),
         "accreditation_records": len(accreditations.get("records", [])),
         "accreditation_unique_names": len(accreditation_names(accreditations)),
-        "credential_entries_by_specialty": totals,
+        "secondary_accreditation_unique_names": len(
+            accreditation_names(accreditations, dataset)
+        ),
+        "credential_entries_by_specialty": totals["maestros"],
+        "secondary_credential_entries_by_specialty": totals["otros"],
         "accreditation_updated_at": accreditations.get("updated_at"),
     }
     dataset["additional_information"] = {
@@ -1312,7 +1417,7 @@ def canonicalize_accreditation_records(records: list[dict], positions: dict) -> 
         {
             str(person[1])
             for person in positions.get("people", [])
-            if len(person) > 4 and isinstance(person[4], list)
+            if len(person) > 1 and person[1]
         }
     )
     exact: dict[str, list[str]] = defaultdict(list)
@@ -1517,13 +1622,25 @@ def recalculate_english_positions(positions: dict, accreditations: dict) -> bool
             while len(position) <= 6:
                 position.append(None)
             position[6] = None
-    totals = add_english_positions(positions, accreditation_names(accreditations))
+    english_metadata = positions.setdefault("english_requirement", {})
+    secondary_targets = english_metadata.get("secondary_eligible_specialties", [])
+    totals = add_english_positions(
+        positions,
+        accreditation_names(accreditations),
+        secondary_targets,
+        accreditation_names(accreditations, positions),
+        set(english_metadata.get("secondary_assignment_confirmed_names", [])),
+    )
     after = [position[6] for person in positions.get("people", []) for position in person[2]]
-    positions.setdefault("english_requirement", {}).update(
+    english_metadata.update(
         {
             "accreditation_records": len(accreditations.get("records", [])),
             "accreditation_unique_names": len(accreditation_names(accreditations)),
-            "credential_entries_by_specialty": totals,
+            "secondary_accreditation_unique_names": len(
+                accreditation_names(accreditations, positions)
+            ),
+            "credential_entries_by_specialty": totals["maestros"],
+            "secondary_credential_entries_by_specialty": totals["otros"],
             "accreditation_updated_at": accreditations.get("updated_at"),
         }
     )

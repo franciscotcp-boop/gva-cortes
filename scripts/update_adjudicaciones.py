@@ -818,10 +818,10 @@ def detect_placement_type(block: list[str]) -> str:
 
 
 def detect_english_requirement(block: list[str], body: str) -> bool:
-    if body != "maestros":
-        return False
+    # Both Maestros and Otros Cuerpos print the same `/ ING.` marker next to
+    # the awarded post. Keep body in the signature for both PDF parsers.
     normalized = norm(" ".join(block))
-    return bool(re.search(r"(?:^|\s)/\s*ing\.?(?=\s|\d|$)", normalized))
+    return bool(re.search(r"(?:^|\s)/\s*ing\b\.?", normalized))
 
 
 def detect_workload(block: list[str]) -> int | str:
@@ -1443,6 +1443,36 @@ def apply_vacancy_totals_curso(data: dict, parsed_items: list[ParsedPdf]) -> boo
     return True
 
 
+def sync_start_fallback_rows(data: dict, body: str) -> bool:
+    inicio = data["cuts"]["inicio"]
+    curso = data["cuts"]["curso"]
+    if curso.get("school_year") != inicio.get("school_year"):
+        return False
+
+    current = [row_with_origin(row, row_origin(row, "inicio")) for row in curso.get("rows", [])]
+    other_bodies = [row for row in current if len(row) < 7 or row[6] != body]
+    course_overrides = {
+        row_key(row): row
+        for row in current
+        if len(row) >= 7 and row[6] == body and row_origin(row, "inicio") == "curso"
+    }
+    fallback_rows = []
+    for raw in inicio.get("rows", []):
+        if len(raw) < 7 or raw[6] != body:
+            continue
+        row = row_with_origin(raw, "inicio")
+        if row_key(row) not in course_overrides:
+            fallback_rows.append(row)
+    updated = sorted(
+        other_bodies + fallback_rows + list(course_overrides.values()),
+        key=lambda row: (str(row[1]), int(row[2]), str(row[0])),
+    )
+    if updated == curso.get("rows", []):
+        return False
+    curso["rows"] = updated
+    return True
+
+
 def apply_inicio(data: dict, parsed_items: list[ParsedPdf]) -> bool:
     changed = False
     latest_by_body: dict[str, ParsedPdf] = {}
@@ -1477,6 +1507,8 @@ def apply_inicio(data: dict, parsed_items: list[ParsedPdf]) -> bool:
         if curso.get("school_year") == school_year and not curso.get("pdfs"):
             curso["updated_at"] = inicio["updated_at"]
             curso["rows"] = [row_with_origin(row, "inicio") for row in inicio["rows"]]
+        elif sync_start_fallback_rows(data, body):
+            changed = True
         mark_processed(data, parsed, "inicio")
         changed = True
     return changed

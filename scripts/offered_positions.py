@@ -65,6 +65,29 @@ def deduplicate_repeated_text(value: str | None) -> str:
     return text
 
 
+def has_english_requirement(value: str | None) -> bool:
+    text = compact_text(value)
+    return bool(
+        re.search(r"\bING(?:L[ÉE]S)?\s*-?\s*B2\b", text, re.IGNORECASE)
+        or re.search(r"(?:^|\s)/\s*ING\b\.?", text, re.IGNORECASE)
+    )
+
+
+def remove_english_requirement(value: str | None) -> str:
+    text = re.sub(
+        r"\bING(?:L[ÉE]S)?\s*-?\s*B2\b",
+        " ",
+        compact_text(value),
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"(?:^|\s)/\s*ING\b\.?",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_date(raw: str) -> str:
     return datetime.strptime(raw, "%d/%m/%Y").date().isoformat()
 
@@ -249,12 +272,7 @@ def parse_pdf(
                     ),
                 )
 
-                requirement_without_english = re.sub(
-                    r"\bING(?:L[ÉE]S)?\s*-?\s*B2\b",
-                    " ",
-                    requirement,
-                    flags=re.IGNORECASE,
-                )
+                requirement_without_english = remove_english_requirement(requirement)
                 hours_match = re.search(
                     r"(?<![\w-])(\d{1,2}(?:[,.]\d+)?)(?![\w-])",
                     requirement_without_english,
@@ -264,7 +282,7 @@ def parse_pdf(
                     if hours_match
                     else None
                 )
-                english_requirement = bool(re.search(r"\bING(?:L[ÉE]S)?\s*-?\s*B2\b", requirement, re.IGNORECASE))
+                english_requirement = has_english_requirement(requirement)
                 itinerant_match = re.match(r"^(S[ÍI]|NO)\b\.?\s*(.*)$", itinerary, re.IGNORECASE)
                 if not itinerant_match:
                     raise ValueError(
