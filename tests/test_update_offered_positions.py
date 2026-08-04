@@ -13,7 +13,12 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from offered_positions import ITEM_FIELDS, build_payload
+from offered_positions import (
+    ITEM_FIELDS,
+    build_payload,
+    has_english_requirement,
+    remove_english_requirement,
+)
 from update_offered_positions import (
     academic_year_for_check,
     document_date_hint,
@@ -77,6 +82,13 @@ def published_payload(publication_date: str, items: list[list], sha: str) -> dic
 
 
 class OfferedPositionLinkTests(unittest.TestCase):
+    def test_recognizes_both_offered_position_english_markers(self) -> None:
+        self.assertTrue(has_english_requirement("ING-B2"))
+        self.assertTrue(has_english_requirement("11,5 / ING."))
+        self.assertTrue(has_english_requirement("/ ING.Jornada completa"))
+        self.assertFalse(has_english_requirement("11,5"))
+        self.assertEqual(remove_english_requirement("11,5 / ING.").strip(), "11,5")
+
     def test_finds_only_offered_position_pdfs(self) -> None:
         html = b"""
         <a href="/docs/260602_pue_prov.pdf">Listado de puestos ofertados</a>

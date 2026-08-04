@@ -485,14 +485,25 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertIsNotNone(row)
         self.assertFalse(row.english_requirement)
 
-    def test_secondary_never_uses_master_english_requirement_flag(self) -> None:
+    def test_secondary_detects_english_requirement_in_same_block(self) -> None:
         block = [
             "95 DOCENTE, PRUEBA",
             "900001 ALMASSORA(12000251)IES ALVARO FALOMIR",
             "219 / TECNOLOGIA",
-            "/ ING. VACANT Adjudicat",
+            "/ ING.Jornada completa VACANT Adjudicat",
         ]
         row = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"))
+        self.assertIsNotNone(row)
+        self.assertTrue(row.english_requirement)
+
+    def test_secondary_without_ing_is_not_marked(self) -> None:
+        block = [
+            "23 MESEGUER LLOPIS, LUIS SALVADOR",
+            "904138 ENGUERA(46020297)IES DE ENGUERA",
+            "3A1 / CUINA I PASTISSERIA",
+            "Jornada completa VACANT Adjudicat",
+        ]
+        row = updater.parse_block(block, "secundaria", ("3A1", "CUINA I PASTISSERIA"))
         self.assertIsNotNone(row)
         self.assertFalse(row.english_requirement)
 
@@ -514,7 +525,6 @@ class VacancyTotalsTests(unittest.TestCase):
             workload=12,
             itinerant=True,
         )
-
     @classmethod
     def parsed(
         cls,
@@ -654,6 +664,34 @@ class VacancyTotalsTests(unittest.TestCase):
         self.assertEqual(summary["updated_at"], "2026-09-10")
         self.assertEqual(summary["counts"], {"123": 1, "128": 2, "206": 1})
         self.assertEqual(summary["total"], 4)
+
+
+class StartFallbackTests(unittest.TestCase):
+    def test_refreshes_start_fallback_without_replacing_course_cut(self) -> None:
+        secondary_start = [
+            "46020297", "3A1", 23, "CUINA", "IES", "ENGUERA",
+            "secundaria", "vacante", "inicio", True, False, None,
+        ]
+        secondary_course = [
+            "03000001", "3A1", 30, "CUINA", "IES", "ALACANT",
+            "secundaria", "sub_indeterminada", "curso", False, False, None,
+        ]
+        stale_start = list(secondary_start)
+        stale_start[9] = False
+        data = {
+            "cuts": {
+                "inicio": {"school_year": "2026-2027", "rows": [secondary_start]},
+                "curso": {
+                    "school_year": "2026-2027",
+                    "rows": [stale_start, secondary_course],
+                },
+            }
+        }
+
+        self.assertTrue(updater.sync_start_fallback_rows(data, "secundaria"))
+        rows = {updater.row_key(row): row for row in data["cuts"]["curso"]["rows"]}
+        self.assertTrue(rows["46020297|3A1|secundaria"][9])
+        self.assertEqual(rows["03000001|3A1|secundaria"][8], "curso")
 
 
 class CutSchemaTests(unittest.TestCase):

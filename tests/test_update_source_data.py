@@ -25,6 +25,7 @@ from update_source_data import (
     rows_from_accreditation_table,
     rows_from_accreditation_ocr_words,
     save_json_atomic,
+    secondary_english_assignment_names,
     select_position_pair,
 )
 from update_adjudicaciones import detect_itinerant, detect_placement_type
@@ -265,6 +266,119 @@ class AccreditationParserTests(unittest.TestCase):
         self.assertEqual(positions["people"][0][2][1][6], 2)
         self.assertEqual(positions["people"][1][2][0][6], 3)
         self.assertEqual(positions["people"][2][2][1][6], 4)
+
+    def test_secondary_english_requirement_uses_211_or_b2_once(self) -> None:
+        positions = {
+            "specialties": [
+                {"code": "211", "body": "otros"},
+                {"code": "206", "body": "otros"},
+                {"code": "3A1", "body": "otros"},
+            ],
+            "people": [
+                [
+                    "Uno",
+                    "UNO, PERSONA",
+                    [["211", 1, 1, 1, 1, None, None], ["3A1", 1, 1, 1, 1, None, None]],
+                    "otros",
+                    None,
+                ],
+                ["Dos", "DOS, PERSONA", [["3A1", 2, 2, 2, 2, None, None]], "otros", None],
+                ["Tres", "TRES, PERSONA", [["3A1", 3, 3, 3, 3, None, None]], "otros", None],
+                [
+                    "Sin requisito en su especialidad",
+                    "CINCO, PERSONA",
+                    [["211", 3, 3, 3, 3, None, None], ["206", 1, 1, 1, 1, None, None]],
+                    "otros",
+                    None,
+                ],
+                [
+                    "Cuatro",
+                    "CUATRO, PERSONA",
+                    [["211", 2, 2, 2, 2, None, None], ["3A1", 4, 4, 4, 4, None, None]],
+                    "otros",
+                    None,
+                ],
+                ["Seis", "SEIS, PERSONA", [["3A1", 5, 5, 5, 5, None, None]], "otros", None],
+            ],
+            "english_requirement": {
+                "secondary_eligible_specialties": ["3A1"],
+                "secondary_assignment_confirmed_names": ["SEIS PERSONA"],
+            },
+        }
+        accreditations = {
+            "updated_at": "2026-07-31",
+            "records": [
+                {"official_name": "UNO, PERSONA"},
+                {"official_name": "DOS, PERSONA"},
+            ],
+        }
+
+        self.assertTrue(recalculate_english_positions(positions, accreditations))
+        self.assertIsNone(positions["people"][0][2][0][6])
+        self.assertEqual(positions["people"][0][2][1][6], 1)
+        self.assertEqual(positions["people"][1][2][0][6], 2)
+        self.assertIsNone(positions["people"][2][2][0][6])
+        self.assertIsNone(positions["people"][3][2][0][6])
+        self.assertIsNone(positions["people"][3][2][1][6])
+        self.assertEqual(positions["people"][4][2][1][6], 3)
+        self.assertEqual(positions["people"][5][2][0][6], 4)
+        self.assertEqual(
+            positions["english_requirement"]["secondary_credential_entries_by_specialty"],
+            {"3A1": 4},
+        )
+
+    def test_secondary_english_award_confirms_missing_historical_credential(self) -> None:
+        positions = {
+            "people": [
+                [
+                    "Persona Prueba",
+                    "PERSONA, PRUEBA",
+                    [["3A1", 8, 8, 5, 5, None, None]],
+                    "otros",
+                    None,
+                ]
+            ]
+        }
+        assignment = Adjudication(
+            cut=5,
+            candidate_name="PERSONA, PRUEBA",
+            center_code="46020297",
+            specialty_code="3A1",
+            specialty_name="CUINA I PASTISSERIA",
+            center_name="IES DE ENGUERA",
+            locality="ENGUERA",
+            body="secundaria",
+            placement_type="vacante",
+            english_requirement=True,
+            workload="C",
+            itinerant=False,
+        )
+
+        self.assertEqual(
+            secondary_english_assignment_names(positions, [assignment]),
+            {"PERSONA PRUEBA"},
+        )
+
+    def test_accreditation_names_are_canonicalized_for_secondary_people(self) -> None:
+        positions = {
+            "people": [
+                [
+                    "Maria Secundaria",
+                    "LOPEZ GARCIA, MARIA",
+                    [["3A1", 1, 1, 1, 1, None, None]],
+                    "otros",
+                    None,
+                ]
+            ]
+        }
+        records = [
+            {
+                "official_name": "LOPEZ GARCIA, MARIA",
+                "display_name": "Maria Lopez Garcia",
+            }
+        ]
+        canonical = canonicalize_accreditation_records(records, positions)
+        self.assertEqual(canonical[0]["official_name"], "LOPEZ GARCIA, MARIA")
 
 
 if __name__ == "__main__":
