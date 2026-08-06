@@ -286,6 +286,7 @@ def smart_title(value: str) -> str:
     titled = re.sub(r"\bD'([A-ZÀ-Ú])", lambda m: "d'" + m.group(1).lower(), titled)
     titled = re.sub(r"\bL'([a-zà-ú])", lambda m: "L'" + m.group(1).upper(), titled)
     titled = titled.replace("Col·Legi", "Col·legi").replace("1Er", "1er")
+    titled = re.sub(r"\bVila-Real\b", "Vila-real", titled)
     for old, new in {"Ii": "II", "Iii": "III", "Iv": "IV", "Vi": "VI", "Vii": "VII", "Viii": "VIII", "Ix": "IX", "Xi": "XI", "Xii": "XII"}.items():
         titled = re.sub(rf"\b{old}\b", new, titled)
     titled = re.sub(
