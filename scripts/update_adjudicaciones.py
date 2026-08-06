@@ -308,6 +308,38 @@ def display_place(value: str) -> str:
     return smart_title(value)
 
 
+def canonicalize_vila_real_data(data: dict) -> bool:
+    """Migrate legacy municipality labels without touching unrelated text."""
+    changed = False
+
+    def replace_field(row: object, index: int) -> None:
+        nonlocal changed
+        if not isinstance(row, list) or len(row) <= index or not isinstance(row[index], str):
+            return
+        corrected = re.sub(r"\bVila-Real\b", "Vila-real", row[index], flags=re.I)
+        if corrected != row[index]:
+            row[index] = corrected
+            changed = True
+
+    center_fields = data.get("center_format")
+    center_name_index = metadata_field_index(center_fields, "nombre", 1)
+    center_municipality_index = metadata_field_index(center_fields, "municipio", 11)
+    for center in data.get("centers", []):
+        replace_field(center, center_name_index)
+        replace_field(center, center_municipality_index)
+
+    cut_fields = data.get("cut_format")
+    cut_center_name_index = metadata_field_index(cut_fields, "nombreCentro", 4)
+    cut_municipality_index = metadata_field_index(cut_fields, "municipio", 5)
+    for period in ("inicio", "curso"):
+        rows = data.get("cuts", {}).get(period, {}).get("rows", [])
+        for row in rows:
+            replace_field(row, cut_center_name_index)
+            replace_field(row, cut_municipality_index)
+
+    return changed
+
+
 def blank_zero(value: str) -> str:
     value = clean(value)
     return "" if value == "0" else value
@@ -1687,6 +1719,7 @@ def main() -> int:
         return 0
 
     data = load_data()
+    place_names_changed = canonicalize_vila_real_data(data)
     data["centers"], centers_by_code = load_centers(data.get("centers", []))
     position_context = None
     if not args.skip_position_context:
@@ -1696,7 +1729,7 @@ def main() -> int:
         )
     master_positions = MasterCutPositionIndex(Path(args.positions))
     target_school_year = None if args.include_old else (args.school_year or school_year_for_date(None, dt))
-    changed = migrate_secondary_header_policy(data, centers_by_code)
+    changed = place_names_changed or migrate_secondary_header_policy(data, centers_by_code)
     changed = ensure_cut_schema(data) or changed
     changed = enrich_master_cut_positions(data, master_positions) or changed
     policy_changed = data.get("cut_policy") != CUT_POLICY
