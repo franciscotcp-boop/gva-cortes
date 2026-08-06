@@ -18,6 +18,24 @@ class CenterOverrideTests(unittest.TestCase):
     def test_vila_real_uses_the_official_casing(self) -> None:
         self.assertEqual(updater.display_place("VILA-REAL"), "Vila-real")
 
+    def test_legacy_vila_real_labels_are_migrated(self) -> None:
+        data = {
+            "center_format": updater.CENTER_FORMAT,
+            "cut_format": updater.CUT_FORMAT,
+            "centers": [["12000000", "CEIP de Vila-Real"] + [""] * 9 + ["Vila-Real"]],
+            "cuts": {
+                "inicio": {"rows": [["12000000", "128", 1, "Primaria", "CEIP de Vila-Real", "VILA-REAL"]]},
+                "curso": {"rows": []},
+            },
+        }
+
+        self.assertTrue(updater.canonicalize_vila_real_data(data))
+        self.assertEqual(data["centers"][0][1], "CEIP de Vila-real")
+        self.assertEqual(data["centers"][0][11], "Vila-real")
+        self.assertEqual(data["cuts"]["inicio"]["rows"][0][4], "CEIP de Vila-real")
+        self.assertEqual(data["cuts"]["inicio"]["rows"][0][5], "Vila-real")
+        self.assertFalse(updater.canonicalize_vila_real_data(data))
+
     def test_override_file_is_valid_and_unique(self) -> None:
         rows = updater.load_center_overrides()
         codes = [str(row[0]) for row in rows]
