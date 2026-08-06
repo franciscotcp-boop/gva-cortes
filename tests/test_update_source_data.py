@@ -13,7 +13,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from update_source_data import (
     Adjudication,
+    AwardPdf,
+    SourceValidationError,
     allowed_accreditation_years,
+    attach_statuses,
     canonicalize_accreditation_records,
     detection_block,
     enrich_status_details_and_context,
@@ -27,6 +30,7 @@ from update_source_data import (
     save_json_atomic,
     secondary_english_assignment_names,
     select_position_pair,
+    validate_assignment_coverage,
 )
 from update_adjudicaciones import detect_itinerant, detect_placement_type
 
@@ -82,6 +86,11 @@ class SourceDocumentTests(unittest.TestCase):
         block = detection_block(["VACANTItinerante", "23 horas"])
         self.assertEqual(detect_placement_type(block), "vacante")
         self.assertTrue(detect_itinerant(block))
+        substitution = detection_block(
+            ["SUBSTITUCIO INDETERMINADAItinerante", "23 horas"]
+        )
+        self.assertEqual(detect_placement_type(substitution), "sub_indeterminada")
+        self.assertTrue(detect_itinerant(substitution))
 
     def test_only_the_actually_awarded_specialty_is_marked_awarded(self) -> None:
         master_positions = [
@@ -129,6 +138,134 @@ class SourceDocumentTests(unittest.TestCase):
         )
         self.assertEqual([row[8] for row in master_positions], ["A", "N"])
         self.assertEqual([row[8] for row in secondary_positions], ["N", "A"])
+
+    def test_split_pdf_name_does_not_hide_master_assignment(self) -> None:
+        position = [
+            "128", 5561, 4702, 5514, 4702, None, None,
+            [0, 0, 0, None, None], "N", None,
+        ]
+        data = {
+            "people": [
+                ["Jose Ayllon Juan", "AYLLON JUAN, JOSE", [position], "maestros", [6909, 6840], "m"]
+            ]
+        }
+        master_rows = [
+            {
+                "official_name": "A YLLON JUAN, JOSE",
+                "adjudication_position": 6840,
+                "raw_status": "A",
+            }
+        ]
+        assignments = [
+            Adjudication(
+                6840,
+                "A YLLON JUAN, JOSE",
+                "03021971",
+                "128",
+                "Educacio Primaria",
+                "CEIP NUMERO 15",
+                "Torrevieja",
+                "maestros",
+                "vacante",
+                False,
+                23,
+                False,
+            )
+        ]
+
+        enrich_status_details_and_context(
+            data, master_rows, [], assignments, "2026-07-15", {}
+        )
+
+        self.assertEqual(position[8], "A")
+        self.assertEqual(position[9][4], "03021971")
+        self.assertEqual(validate_assignment_coverage(data, assignments)["represented"], 1)
+
+    def test_status_attachment_accepts_split_names_and_specialty_suffixes(self) -> None:
+        rows = [
+            {
+                "official_name": "AYLLON JUAN, JOSE",
+                "global_position": 1,
+                "positions": [("128", 1)],
+            }
+        ]
+        award = AwardPdf(
+            "maestros",
+            "2026-07-15",
+            1,
+            [
+                {
+                    "official_name": "A YLLON JUAN, JOSE ( Esp: 128 )",
+                    "identity": "A YLLON JUAN JOSE ESP 128",
+                    "printed_position": 6840,
+                    "deactivated": False,
+                    "raw_status": "A",
+                }
+            ],
+            [],
+        )
+
+        attach_statuses(rows, [], award, None)
+
+        self.assertEqual(rows[0]["adjudication_position"], 6840)
+        self.assertEqual(rows[0]["raw_status"], "A")
+
+    def test_new_result_replaces_stale_disabled_habilitation(self) -> None:
+        position = [
+            "3A1", 6, 4, 4, 4, None, None,
+            [0, 0, 0, None, None], "H", None,
+        ]
+        data = {
+            "people": [
+                ["Docente", "APELLIDOS, NOMBRE", [position], "otros", None, "u"]
+            ]
+        }
+        secondary_rows = [
+            {
+                "official_name": "APELLIDOS, NOMBRE ( Esp: 334 )",
+                "specialty_code": "3A1",
+                "position": 6,
+                "adjudication_position": 4,
+                "raw_status": "P",
+                "disabled_habilitation": True,
+            }
+        ]
+
+        enrich_status_details_and_context(
+            data, [], secondary_rows, [], "2026-07-15", {}
+        )
+
+        self.assertEqual(position[8], "P")
+
+    def test_assignment_integrity_gate_rejects_an_omitted_award(self) -> None:
+        position = [
+            "128", 1, 1, 1, 1, None, None,
+            [0, 0, 0, None, None], "N", None,
+        ]
+        data = {
+            "people": [
+                ["Docente", "APELLIDOS, NOMBRE", [position], "maestros", [1, 1], "u"]
+            ]
+        }
+        assignments = [
+            Adjudication(
+                1,
+                "APELLIDOS, NOMBRE",
+                "03000001",
+                "128",
+                "Educacio Primaria",
+                "Centro",
+                "Alacant",
+                "maestros",
+                "vacante",
+                False,
+                23,
+                False,
+            )
+        ]
+
+        with self.assertRaises(SourceValidationError):
+            validate_assignment_coverage(data, assignments)
 
 
 class AccreditationParserTests(unittest.TestCase):

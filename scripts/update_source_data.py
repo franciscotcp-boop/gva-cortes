@@ -405,8 +405,8 @@ def detection_block(block: list[str]) -> list[str]:
 
     return [
         re.sub(
-            r"(?i)(vacant(?:e)?)(itinerant(?:e)?)",
-            r"\1 \2",
+            r"(?i)(?<!\s)(itinerant(?:e)?)\b",
+            r" \1",
             item,
         )
         for item in block
@@ -537,6 +537,11 @@ def parse_award_pdf(pdf_bytes: bytes) -> AwardPdf:
     return AwardPdf(body, published_date, page_count, statuses, assignments)
 
 
+def award_identity_key(value: str) -> str:
+    value = re.sub(r"\(\s*esp[^)]*\)\s*$", "", value, flags=re.IGNORECASE)
+    return identity_key(value).replace(" ", "")
+
+
 def attach_statuses(
     master_rows: list[dict],
     secondary_rows: list[dict],
@@ -549,13 +554,13 @@ def attach_statuses(
         used_master_statuses: set[int] = set()
         for record in sorted(master_award.statuses, key=lambda item: item["printed_position"]):
             by_name[record["identity"]].append(record)
-            by_compact_name[record["identity"].replace(" ", "")].append(record)
+            by_compact_name[award_identity_key(record["official_name"])].append(record)
         for row in master_rows:
             queue = by_name.get(identity_key(row["official_name"]))
             while queue and id(queue[0]) in used_master_statuses:
                 queue.popleft()
             if not queue:
-                queue = by_compact_name.get(identity_key(row["official_name"]).replace(" ", ""))
+                queue = by_compact_name.get(award_identity_key(row["official_name"]))
                 while queue and id(queue[0]) in used_master_statuses:
                     queue.popleft()
             if queue:
@@ -614,14 +619,14 @@ def attach_statuses(
             code = str(record.get("specialty_code") or "")
             if code:
                 by_key[(code, record["identity"])].append(record)
-                by_compact_key[(code, record["identity"].replace(" ", ""))].append(record)
+                by_compact_key[(code, award_identity_key(record["official_name"]))].append(record)
         for row in secondary_rows:
             key = (row["specialty_code"], identity_key(row["official_name"]))
             queue = by_key.get(key)
             while queue and id(queue[0]) in used_secondary_statuses:
                 queue.popleft()
             if not queue:
-                compact_key = (row["specialty_code"], key[1].replace(" ", ""))
+                compact_key = (row["specialty_code"], award_identity_key(row["official_name"]))
                 queue = by_compact_key.get(compact_key)
                 while queue and id(queue[0]) in used_secondary_statuses:
                     queue.popleft()
@@ -798,6 +803,82 @@ def assignment_key(assignment: Adjudication) -> tuple[str, str, int]:
     return assignment.body, assignment.specialty_code, int(assignment.cut)
 
 
+def card_assignment_key(person: list, position: list) -> tuple[str, str, int] | None:
+    code = str(position[0])
+    is_master = isinstance(person[4], list) and code in MASTER_CODES
+    cut = person[4][1] if is_master and len(person[4]) > 1 else position[3]
+    if cut is None:
+        return None
+    return ("maestros" if is_master else "secundaria", code, int(cut))
+
+
+def validate_assignment_coverage(
+    data: dict,
+    assignments: Iterable[Adjudication],
+) -> dict[str, int]:
+    assignment_map: dict[tuple[str, str, int], Adjudication] = {}
+    problems: list[str] = []
+    for assignment in assignments:
+        key = assignment_key(assignment)
+        previous = assignment_map.get(key)
+        if previous and (
+            previous.center_code != assignment.center_code
+            or identity_key(previous.candidate_name) != identity_key(assignment.candidate_name)
+        ):
+            problems.append(f"adjudicaciones incompatibles para {key}")
+        assignment_map[key] = assignment
+
+    cards: dict[tuple[str, str, int], tuple[list, list]] = {}
+    for person in data.get("people", []):
+        for position in person[2]:
+            key = card_assignment_key(person, position)
+            if key is None:
+                continue
+            if key in cards:
+                problems.append(f"dos fichas comparten {key}")
+            cards[key] = (person, position)
+
+    represented = 0
+    for key, (person, position) in cards.items():
+        assignment = assignment_map.get(key)
+        status = position[8] if len(position) > 8 else None
+        detail = position[9] if len(position) > 9 else None
+        if assignment is None:
+            if status == "A":
+                problems.append(f"falso adjudicado {person[1]} en {key}")
+            continue
+        represented += 1
+        if status != "A":
+            problems.append(f"adjudicacion omitida {person[1]} en {key}")
+            continue
+        if not isinstance(detail, list) or len(detail) < len(DETAIL_FIELDS):
+            problems.append(f"detalle ausente {person[1]} en {key}")
+            continue
+        expected = (
+            assignment.placement_type,
+            assignment.workload,
+            assignment.center_code,
+            bool(assignment.english_requirement),
+            bool(assignment.itinerant),
+        )
+        actual = (detail[2], detail[3], detail[4], bool(detail[5]), bool(detail[6]))
+        if actual != expected:
+            problems.append(f"detalle incorrecto {person[1]} en {key}")
+
+    if problems:
+        preview = "; ".join(problems[:12])
+        suffix = f"; y {len(problems) - 12} mas" if len(problems) > 12 else ""
+        raise SourceValidationError(
+            f"La conciliacion de adjudicaciones detecto {len(problems)} errores: "
+            f"{preview}{suffix}"
+        )
+    return {
+        "assignments": len(assignment_map),
+        "represented": represented,
+        "unrepresented": len(set(assignment_map) - set(cards)),
+    }
+
+
 def enrich_status_details_and_context(
     data: dict,
     master_rows: list[dict],
@@ -807,51 +888,67 @@ def enrich_status_details_and_context(
     centers: dict[str, tuple[str, str]],
 ) -> None:
     assignment_map = {assignment_key(item): item for item in assignments}
-    master_status = {
-        (identity_key(row["official_name"]), row.get("adjudication_position")): row.get("raw_status", "N")
-        for row in master_rows
-        if row.get("adjudication_position") is not None
-    }
-    secondary_status = {
-        (row["specialty_code"], identity_key(row["official_name"]), row.get("adjudication_position")): row.get("raw_status", "N")
-        for row in secondary_rows
-        if row.get("adjudication_position") is not None
-    }
+    master_status: dict[int, str] = {}
+    for row in master_rows:
+        if row.get("adjudication_position") is None:
+            continue
+        key = int(row["adjudication_position"])
+        status = row.get("raw_status", "N")
+        if key in master_status and master_status[key] != status:
+            raise SourceValidationError(f"Estados incompatibles de Maestros en {key}")
+        master_status[key] = status
+
+    secondary_status: dict[tuple[str, int], str] = {}
+    for row in secondary_rows:
+        if row.get("adjudication_position") is None:
+            continue
+        key = (str(row["specialty_code"]), int(row["adjudication_position"]))
+        status = row.get("raw_status", "N")
+        if key in secondary_status and secondary_status[key] != status:
+            raise SourceValidationError(f"Estados incompatibles de Secundaria en {key}")
+        secondary_status[key] = status
+
     secondary_disabled = {
-        (row["specialty_code"], identity_key(row["official_name"]), row["position"])
+        (str(row["specialty_code"]), int(row["position"]))
         for row in secondary_rows
         if row.get("disabled_habilitation")
     }
     award_events: dict[str, list[tuple[int, int]]] = defaultdict(list)
 
     for person in data["people"]:
-        identity = identity_key(person[1])
         for position in person[2]:
             code = str(position[0])
-            is_master = isinstance(person[4], list) and code in MASTER_CODES
-            cut = person[4][1] if is_master and person[4] else position[3]
-            assignment_body = "maestros" if is_master else "secundaria"
-            assignment = (
-                assignment_map.get((assignment_body, code, int(cut)))
-                if cut is not None
-                else None
-            )
-            if not is_master and (code, identity, int(position[1])) in secondary_disabled:
-                status = "H"
-            elif assignment:
+            key = card_assignment_key(person, position)
+            is_master = bool(key and key[0] == "maestros")
+            cut = key[2] if key else None
+            assignment = assignment_map.get(key) if key else None
+            if assignment:
                 status = "A"
             elif is_master:
-                raw_status = master_status.get((identity, cut), "N")
+                raw_status = master_status.get(int(cut), "N")
                 status = "N" if raw_status == "A" else raw_status
             else:
-                raw_status = secondary_status.get((code, identity, cut), "N")
-                status = "N" if raw_status == "A" else raw_status
+                raw_status = secondary_status.get((code, int(cut))) if cut is not None else None
+                if raw_status is not None:
+                    status = "N" if raw_status == "A" else raw_status
+                elif (code, int(position[1])) in secondary_disabled:
+                    status = "H"
+                else:
+                    status = "N"
             position[8] = status if status in {"A", "N", "P", "D", "H"} else "N"
             if assignment:
-                center_name, municipality = centers.get(
-                    assignment.center_code,
-                    (assignment.center_name, assignment.locality),
-                )
+                previous_detail = position[9] if isinstance(position[9], list) else None
+                if (
+                    previous_detail
+                    and len(previous_detail) >= len(DETAIL_FIELDS)
+                    and previous_detail[4] == assignment.center_code
+                ):
+                    center_name, municipality = previous_detail[7], previous_detail[8]
+                else:
+                    center_name, municipality = centers.get(
+                        assignment.center_code,
+                        (assignment.center_name, assignment.locality),
+                    )
                 position[9] = [
                     "I",
                     published_date,
@@ -1090,6 +1187,7 @@ def build_positions_dataset(
         published_date,
         center_lookup(cuts),
     )
+    validate_assignment_coverage(dataset, assignments)
     dataset["last_awarded_by_specialty"] = last_awarded_rows(dataset)
     dataset["english_requirement"] = {
         "body": "maestros",
