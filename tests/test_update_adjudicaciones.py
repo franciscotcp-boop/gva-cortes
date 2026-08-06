@@ -15,6 +15,9 @@ import update_adjudicaciones as updater
 
 
 class CenterOverrideTests(unittest.TestCase):
+    def test_vila_real_uses_the_official_casing(self) -> None:
+        self.assertEqual(updater.display_place("VILA-REAL"), "Vila-real")
+
     def test_override_file_is_valid_and_unique(self) -> None:
         rows = updater.load_center_overrides()
         codes = [str(row[0]) for row in rows]
