@@ -428,10 +428,23 @@ def load_data() -> dict:
     return data
 
 
-def save_data(data: dict) -> None:
+def save_data(data: dict) -> bool:
+    """Write the public payload only when its substantive contents changed."""
+    if DATA_PATH.exists():
+        try:
+            previous = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = None
+        if isinstance(previous, dict):
+            previous_content = {key: value for key, value in previous.items() if key != "generated_at"}
+            current_content = {key: value for key, value in data.items() if key != "generated_at"}
+            if previous_content == current_content:
+                return False
+
     data["generated_at"] = now_local().isoformat(timespec="seconds")
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     DATA_PATH.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=False) + "\n", encoding="utf-8")
+    return True
 
 
 def is_start_window(dt: datetime) -> bool:
@@ -1754,9 +1767,9 @@ def main() -> int:
     changed = enrich_master_cut_positions(data, master_positions) or changed
     changed = ensure_period_metadata(data) or changed
 
-    save_data(data)
+    data_file_changed = save_data(data)
     position_context_changed = bool(position_context and position_context.save())
-    print("JSON actualizado" if changed else "Sin cambios de adjudicaciones")
+    print("JSON actualizado" if data_file_changed else "Sin cambios de adjudicaciones")
     if position_context_changed:
         print("Informacion provincial de posiciones actualizada")
     return 0
