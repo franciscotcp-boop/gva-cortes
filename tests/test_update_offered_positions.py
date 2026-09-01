@@ -24,6 +24,7 @@ from update_offered_positions import (
     document_date_hint,
     links_for_latest_target_document,
     merge_snapshot,
+    enrich_assignments_from_offers,
     offered_position_links,
     prune_expired_difficult,
     reconcile_after_adjudication,
@@ -39,6 +40,7 @@ def sample_item(
     specialty_code: str = "128",
     difficult: bool = False,
     snapshot_date: str = "2026-09-07",
+    observations: str = "",
 ) -> list:
     return [
         order,
@@ -52,7 +54,7 @@ def sample_item(
         23.0,
         False,
         False,
-        "",
+        observations,
         "vacante",
         "",
         difficult,
@@ -326,6 +328,58 @@ class OfferedPositionUpdateTests(unittest.TestCase):
         self.assertEqual(result["remaining"], 1)
         self.assertEqual(saved["items"][0][7], "000002")
         self.assertIs(saved["items"][0][16], True)
+
+    def test_adjudication_inherits_observations_from_the_matching_offer(self) -> None:
+        payload = published_payload(
+            "2026-09-03",
+            [
+                sample_item(
+                    1,
+                    observations="PROA+ fins 30/06/2027",
+                    snapshot_date="2026-09-03",
+                )
+            ],
+            "ordinary",
+        )
+        self.output.write_text(json.dumps(payload), encoding="utf-8")
+        assignment = SimpleNamespace(
+            slot_id="000001",
+            center_code="03000001",
+            specialty_code="128",
+            observations="",
+        )
+
+        result = enrich_assignments_from_offers(
+            output=self.output,
+            assignments=[assignment],
+            academic_year="2026-2027",
+        )
+
+        self.assertEqual(result, {"matched": 1, "with_observations": 1})
+        self.assertEqual(assignment.observations, "PROA+ fins 30/06/2027")
+
+    def test_pdf_observation_has_priority_over_the_matching_offer(self) -> None:
+        payload = published_payload(
+            "2026-09-03",
+            [sample_item(1, observations="Observación anterior")],
+            "ordinary",
+        )
+        self.output.write_text(json.dumps(payload), encoding="utf-8")
+        assignment = SimpleNamespace(
+            slot_id="000001",
+            center_code="03000001",
+            specialty_code="128",
+            observations="PCT Matemàtica",
+        )
+
+        result = enrich_assignments_from_offers(
+            output=self.output,
+            assignments=[assignment],
+            academic_year="2026-2027",
+        )
+
+        self.assertEqual(result, {"matched": 1, "with_observations": 1})
+        self.assertEqual(assignment.observations, "PCT Matemàtica")
 
 
 if __name__ == "__main__":

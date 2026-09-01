@@ -32,7 +32,11 @@ from update_source_data import (
     select_position_pair,
     validate_assignment_coverage,
 )
-from update_adjudicaciones import detect_itinerant, detect_placement_type
+from update_adjudicaciones import (
+    detect_itinerant,
+    detect_observations,
+    detect_placement_type,
+)
 
 
 class SourceDocumentTests(unittest.TestCase):
@@ -91,6 +95,33 @@ class SourceDocumentTests(unittest.TestCase):
         )
         self.assertEqual(detect_placement_type(substitution), "sub_indeterminada")
         self.assertTrue(detect_itinerant(substitution))
+
+    def test_optional_adjudication_observations_are_extracted(self) -> None:
+        self.assertEqual(
+            detect_observations(
+                ["23 hores PROA+ fins 30/06/2027 VACANT Adjudicat"]
+            ),
+            "PROA+ fins 30/06/2027",
+        )
+        self.assertEqual(
+            detect_observations(["Observacions: PCT Matemàtica"]),
+            "PCT Matemàtica",
+        )
+        self.assertEqual(
+            detect_observations(
+                ["23 horas SUBSTITUCIÓ INDETERMINADA Itinerante Adjudicat"]
+            ),
+            "",
+        )
+        self.assertEqual(
+            detect_observations(
+                [
+                    "nn / mm-> nn = docentes en bolsa sin ocupación / "
+                    "mm = docentes que participan activamente"
+                ]
+            ),
+            "",
+        )
 
     def test_only_the_actually_awarded_specialty_is_marked_awarded(self) -> None:
         master_positions = [

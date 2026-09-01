@@ -31,6 +31,7 @@ def assignment(
     itinerant: bool = False,
     center_name: str = "Centro de prueba",
     locality: str = "Localidad de prueba",
+    observations: str = "",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         candidate_name=name,
@@ -44,6 +45,7 @@ def assignment(
         itinerant=itinerant,
         center_name=center_name,
         locality=locality,
+        observations=observations,
     )
 
 
@@ -181,6 +183,7 @@ class PositionContextTests(unittest.TestCase):
                             itinerant=True,
                             center_name="CIPFP Canastell",
                             locality="Sant Vicent del Raspeig",
+                            observations="PROA+ fins 30/06/2027",
                         )
                     ],
                 )
@@ -204,6 +207,7 @@ class PositionContextTests(unittest.TestCase):
                 True,
                 "CIPFP Canastell",
                 "Sant Vicent del Raspeig",
+                "PROA+ fins 30/06/2027",
             ],
         )
 
@@ -234,7 +238,7 @@ class PositionContextTests(unittest.TestCase):
 
         detail = self.load_positions()["people"][0][2][0][9]
         self.assertEqual(detail[:5], ["C", "2026-09-08", "sub_indeterminada", 18, "46000001"])
-        self.assertEqual(detail[7:], ["IES de prueba", "Valencia"])
+        self.assertEqual(detail[7:], ["IES de prueba", "Valencia", ""])
 
     def test_legacy_province_state_is_migrated_without_losing_rows(self) -> None:
         legacy_fields = [
@@ -286,9 +290,12 @@ class PositionContextTests(unittest.TestCase):
         updater = PositionContextUpdater(self.positions_path, self.state_path)
 
         self.assertTrue(updater.enabled)
-        self.assertEqual(updater.state["schema_version"], 2)
+        self.assertEqual(updater.state["schema_version"], 3)
         self.assertEqual(updater.state["assignments"][0][:14], legacy_row)
-        self.assertEqual(updater.state["assignments"][0][14:], [None, None, None, None, None])
+        self.assertEqual(
+            updater.state["assignments"][0][14:],
+            [None, None, None, None, None, None],
+        )
 
 
 if __name__ == "__main__":
