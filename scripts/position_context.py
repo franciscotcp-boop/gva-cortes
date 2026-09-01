@@ -24,7 +24,7 @@ MASTER_SPECIALTY_CODES = frozenset({
 })
 PROVINCE_INDEX = {"03": 0, "46": 1, "12": 2}
 PROVINCES = ("alicante", "valencia", "castellon")
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 ASSIGNMENT_FIELDS = [
     "body",
     "specialty_code",
@@ -45,6 +45,7 @@ ASSIGNMENT_FIELDS = [
     "itinerant",
     "center_name",
     "locality",
+    "observations",
 ]
 
 
@@ -331,6 +332,7 @@ class PositionContextUpdater:
                 "itinerant": getattr(assignment, "itinerant", False) is True,
                 "center_name": str(getattr(assignment, "center_name", "") or ""),
                 "locality": str(getattr(assignment, "locality", "") or ""),
+                "observations": str(getattr(assignment, "observations", "") or ""),
             })
         return resolved, dict(skipped)
 
@@ -478,11 +480,12 @@ class PositionContextUpdater:
                 row.get("itinerant") is True,
                 str(row.get("center_name") or ""),
                 str(row.get("locality") or ""),
+                str(row.get("observations") or ""),
             ]
 
         self.positions["schema_version"] = max(9, int(self.positions.get("schema_version") or 0))
         details = self.positions.setdefault("adjudication_details", {})
-        details["version"] = max(1, int(details.get("version") or 0))
+        details["version"] = max(2, int(details.get("version") or 0))
         details["position_index"] = 9
         details["fields"] = [
             "stage",
@@ -494,6 +497,7 @@ class PositionContextUpdater:
             "itinerant",
             "center_name",
             "municipality",
+            "observations",
         ]
         details["workload_full_time_code"] = "C"
         details["continuous_policy"] = "La adjudicacion mas reciente de la misma persona y especialidad sustituye el detalle anterior."

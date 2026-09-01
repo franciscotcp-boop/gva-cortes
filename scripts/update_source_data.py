@@ -44,6 +44,7 @@ from update_adjudicaciones import (
     clean,
     detect_english_requirement,
     detect_itinerant,
+    detect_observations,
     detect_placement_type,
     detect_workload,
     parse_date_from_text,
@@ -119,6 +120,7 @@ DETAIL_FIELDS = [
     "itinerant",
     "center_name",
     "municipality",
+    "observations",
 ]
 
 
@@ -528,6 +530,7 @@ def parse_award_pdf(pdf_bytes: bytes) -> AwardPdf:
                     english_requirement=detect_english_requirement(detection_segment, body),
                     workload=detect_workload(detection_segment),
                     itinerant=detect_itinerant(detection_segment),
+                    observations=detect_observations(detection_segment),
                 )
             )
     if len(statuses) < 1000:
@@ -959,6 +962,7 @@ def enrich_status_details_and_context(
                     bool(assignment.itinerant),
                     center_name,
                     municipality,
+                    str(getattr(assignment, "observations", "") or ""),
                 ]
                 order = position[3] if position[3] is not None else position[1]
                 province = PROVINCE_BY_PREFIX.get(assignment.center_code[:2])

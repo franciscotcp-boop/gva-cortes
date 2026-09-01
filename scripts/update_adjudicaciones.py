@@ -26,7 +26,10 @@ from zoneinfo import ZoneInfo
 import pdfplumber
 
 from position_context import PositionContextUpdater
-from update_offered_positions import reconcile_after_adjudication
+from update_offered_positions import (
+    enrich_assignments_from_offers,
+    reconcile_after_adjudication,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -224,6 +227,7 @@ class Adjudication:
     workload: int | str
     itinerant: bool
     slot_id: str = ""
+    observations: str = ""
 
 
 @dataclass
@@ -884,6 +888,60 @@ def detect_itinerant(block: list[str]) -> bool:
     return bool(re.search(r"\bitinerant(?:e)?\b", norm(" ".join(block))))
 
 
+def detect_observations(block: list[str]) -> str:
+    """Extract optional free-form notes from an awarded-position block."""
+
+    observations: list[str] = []
+    for raw_line in block:
+        value = clean(raw_line)
+        if not value:
+            continue
+        labelled = re.search(
+            r"(?i)\b(?:observacions?|observaciones?|observ\.)\s*[:.-]?\s*(.*)$",
+            value,
+        )
+        if labelled:
+            value = clean(labelled.group(1))
+        else:
+            normalized = norm(value)
+            if (
+                CANDIDATE_RE.match(value)
+                or CENTER_RE.match(value)
+                or SPECIALTY_RE.match(value)
+                or re.search(r"\(\d{8}\)", value)
+                or "," in value
+                or re.fullmatch(r"\d{1,7}", value)
+                or re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", value)
+                or "adjudicacio de personal docent" in normalized
+                or "adjudicacion de personal docente" in normalized
+                or "mestres / maestros" in normalized
+                or "altres cossos / otros cuerpos" in normalized
+                or "docentes en bolsa sin ocupacion" in normalized
+                or "docents en borsa" in normalized
+                or normalized in {"mestres", "maestros"}
+            ):
+                continue
+
+        # What remains after removing the fixed row labels is the optional
+        # observation printed by Conselleria (PROA+, PCT, centre singular...).
+        value = re.sub(r"(?i)(?:^|\s)/\s*ING\.?\b", " ", value)
+        value = re.sub(r"(?i)\b\d{1,2}(?:[.,]\d+)?\s*(?:hores?|horas?)\b", " ", value)
+        value = re.sub(r"(?i)\bjornada\s+completa\b", " ", value)
+        value = re.sub(
+            r"(?i)\b(?:substituci\S*|sustituci\S*)\s+(?:in)?determinada\b",
+            " ",
+            value,
+        )
+        value = re.sub(r"(?i)\bvacant(?:e|s)?\b", " ", value)
+        value = re.sub(r"(?i)\bitinerant(?:e)?\b", " ", value)
+        value = re.sub(r"(?i)\badjudicat\S*\b", " ", value)
+        value = re.sub(r"(?i)\b(?:ha\s+participat|no\s+adjudicat\S*|desactivat\S*)\b", " ", value)
+        value = clean(value).strip(" -/.:;|")
+        if value and norm(value) not in {norm(item) for item in observations}:
+            observations.append(value)
+    return "; ".join(observations)
+
+
 def candidate_name_from_line(line: str, match_cut: re.Match[str]) -> str:
     value = clean(line[match_cut.end() :])
     value = re.split(
@@ -940,6 +998,7 @@ def parse_block(
         workload=detect_workload(block),
         itinerant=detect_itinerant(block),
         slot_id=center_match.group(1),
+        observations=detect_observations(block),
     )
 
 
@@ -1668,6 +1727,22 @@ def run_mode(
     else:
         result = apply_curso(data, parsed_items) or changed
         result = apply_vacancy_totals_curso(data, parsed_items) or result
+    assignments = [
+        assignment
+        for item in parsed_items
+        for assignment in item.assignments
+    ]
+    if parsed_items and mode == "curso":
+        enrichment = enrich_assignments_from_offers(
+            output=OFFERED_POSITIONS_PATH,
+            assignments=assignments,
+            academic_year=target_school_year or "",
+        )
+        if enrichment["with_observations"]:
+            print(
+                "puestos ofertados: "
+                f"{enrichment['with_observations']} adjudicaciones conservan observaciones"
+            )
     if position_context is not None and parsed_items:
         position_context.apply(parsed_items, mode)
     if mode == "curso" and parsed_items:
@@ -1677,11 +1752,7 @@ def run_mode(
         academic_year = school_year_for_date(adjudication_date, now_local())
         reconciliation = reconcile_after_adjudication(
             output=OFFERED_POSITIONS_PATH,
-            assignments=[
-                assignment
-                for item in parsed_items
-                for assignment in item.assignments
-            ],
+            assignments=assignments,
             academic_year=academic_year,
             adjudication_date=adjudication_date,
         )

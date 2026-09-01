@@ -488,6 +488,51 @@ def normalized_slot(value: object) -> str:
     return digits.lstrip("0") or ("0" if digits else "")
 
 
+def enrich_assignments_from_offers(
+    *,
+    output: Path,
+    assignments: list[object],
+    academic_year: str,
+) -> dict[str, int]:
+    """Attach offer observations to matching adjudications before profiles are rebuilt."""
+
+    existing = load_existing(output)
+    if existing.get("academic_year") != academic_year or existing.get("dataset") != DATASET:
+        return {"matched": 0, "with_observations": 0}
+
+    offers: dict[tuple[str, str, str], dict] = {}
+    for row in canonical_items(existing):
+        values = item_as_dict(row, ITEM_FIELDS, existing.get("publication_date"))
+        key = (
+            normalized_slot(values.get("slot_id")),
+            str(values.get("center_code") or ""),
+            str(values.get("specialty_code") or ""),
+        )
+        if key[0]:
+            offers[key] = values
+
+    matched = 0
+    with_observations = 0
+    for assignment in assignments:
+        direct_observations = compact_text(getattr(assignment, "observations", ""))
+        key = (
+            normalized_slot(getattr(assignment, "slot_id", "")),
+            str(getattr(assignment, "center_code", "")),
+            str(getattr(assignment, "specialty_code", "")),
+        )
+        offer = offers.get(key)
+        if offer is None:
+            if direct_observations:
+                with_observations += 1
+            continue
+        matched += 1
+        observations = direct_observations or compact_text(offer.get("observations"))
+        setattr(assignment, "observations", observations)
+        if observations:
+            with_observations += 1
+    return {"matched": matched, "with_observations": with_observations}
+
+
 def reconcile_after_adjudication(
     *,
     output: Path,
