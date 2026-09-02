@@ -23,8 +23,33 @@ ACCREDITATION_HOURS = frozenset({12, 14, 16, 18, 20})
 OFFER_HOURS = frozenset({9, 11, 13, 15, 17, 19, 20})
 DIFFICULT_HOURS = frozenset({9, 11, 13, 15, 17, 19, 21, 23})
 BROAD_SCHEDULE = "20 7-23 * * *"
+START_CEST_SCHEDULE = "20 7,10,13,16,19 * 7-8 1-6"
+COURSE_CEST_SCHEDULE = "20 7,10,13,16,19 * 3-6,9-10 2,4"
+COURSE_CET_SCHEDULE = "20 8,11,14,17,20 * 1-3,10-12 2,4"
+POSITION_CEST_SCHEDULE = "20 7,9,11,13,15,17 * 6-7 *"
+ACCREDITATION_CEST_SCHEDULE = "20 10,12,14,16,18 * 3-7,9-10 5"
+ACCREDITATION_CET_SCHEDULE = "20 11,13,15,17,19 * 1-3,10-12 5"
 OFFER_CEST_SCHEDULE = "7 7,9,11,13,15,17,18 * 1-7,9-12 1,3"
 OFFER_CET_SCHEDULE = "8 8,10,12,14,16,18,19 * 1-7,9-12 1,3"
+DIFFICULT_CEST_SCHEDULE = "20 7,9,11,13,15,17,19,21 * 3-6,9-10 5"
+DIFFICULT_CET_SCHEDULE = "20 8,10,12,14,16,18,20,22 * 1-3,10-12 5"
+CLEANUP_CEST_SCHEDULE = "20 22 * 3-6,9-10 5"
+CLEANUP_CET_SCHEDULE = "20 23 * 1-3,10-12 5"
+
+EXPLICIT_SCHEDULES = {
+    START_CEST_SCHEDULE: ("inicio", 2),
+    COURSE_CEST_SCHEDULE: ("curso", 2),
+    COURSE_CET_SCHEDULE: ("curso", 1),
+    POSITION_CEST_SCHEDULE: ("posiciones", 2),
+    ACCREDITATION_CEST_SCHEDULE: ("acreditaciones", 2),
+    ACCREDITATION_CET_SCHEDULE: ("acreditaciones", 1),
+    OFFER_CEST_SCHEDULE: ("puestos", 2),
+    OFFER_CET_SCHEDULE: ("puestos", 1),
+    DIFFICULT_CEST_SCHEDULE: ("dificil", 2),
+    DIFFICULT_CET_SCHEDULE: ("dificil", 1),
+    CLEANUP_CEST_SCHEDULE: ("limpieza_puestos", 2),
+    CLEANUP_CET_SCHEDULE: ("limpieza_puestos", 1),
+}
 
 
 def scheduled_modes(value: datetime) -> tuple[str, ...]:
@@ -76,26 +101,16 @@ def scheduled_event_modes(
     """Resolve a cron event without depending on GitHub's actual start hour."""
 
     expression = schedule_expression.strip()
-    if expression in {OFFER_CEST_SCHEDULE, OFFER_CET_SCHEDULE}:
+    if expression in EXPLICIT_SCHEDULES:
         current = value.astimezone(MADRID)
-        expected_offset_hours = 2 if expression == OFFER_CEST_SCHEDULE else 1
+        mode, expected_offset_hours = EXPLICIT_SCHEDULES[expression]
         offset = current.utcoffset()
         offset_hours = int(offset.total_seconds() // 3600) if offset else 0
-        month = current.month
-        offers_in_season = month in {9, 10, 11, 12, 1, 2, 3, 4, 5, 6} or (
-            month == 7 and current.day == 1
-        )
-        if (
-            offset_hours == expected_offset_hours
-            and offers_in_season
-            and current.isoweekday() in {1, 3}
-        ):
-            return ("puestos",)
-        return ()
+        return (mode,) if offset_hours == expected_offset_hours else ()
 
     modes = scheduled_modes(value)
     if expression == BROAD_SCHEDULE:
-        return tuple(mode for mode in modes if mode != "puestos")
+        return ()
     return modes
 
 

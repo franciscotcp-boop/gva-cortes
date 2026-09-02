@@ -10,11 +10,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from automation_schedule import (
+    ACCREDITATION_CEST_SCHEDULE,
+    ACCREDITATION_CET_SCHEDULE,
     ALL_MODES,
     BROAD_SCHEDULE,
+    CLEANUP_CEST_SCHEDULE,
+    CLEANUP_CET_SCHEDULE,
+    COURSE_CEST_SCHEDULE,
+    COURSE_CET_SCHEDULE,
+    DIFFICULT_CEST_SCHEDULE,
+    DIFFICULT_CET_SCHEDULE,
     MADRID,
     OFFER_CEST_SCHEDULE,
     OFFER_CET_SCHEDULE,
+    POSITION_CEST_SCHEDULE,
+    START_CEST_SCHEDULE,
     explicit_modes,
     scheduled_event_modes,
     scheduled_modes,
@@ -88,6 +98,74 @@ class AutomationScheduleTests(unittest.TestCase):
             scheduled_event_modes(
                 local("2026-09-02T19:20:00"), BROAD_SCHEDULE
             ),
+        )
+
+    def test_every_source_schedule_survives_a_delayed_start(self) -> None:
+        delayed_summer = local("2026-07-21T10:47:00")
+        delayed_winter = local("2026-12-03T10:47:00")
+        delayed_autumn = local("2026-09-04T13:47:00")
+        delayed_cleanup = local("2026-09-05T02:10:00")
+
+        self.assertEqual(
+            scheduled_event_modes(delayed_summer, START_CEST_SCHEDULE),
+            ("inicio",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(delayed_summer, POSITION_CEST_SCHEDULE),
+            ("posiciones",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(delayed_winter, COURSE_CET_SCHEDULE),
+            ("curso",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(delayed_autumn, ACCREDITATION_CEST_SCHEDULE),
+            ("acreditaciones",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(delayed_autumn, DIFFICULT_CEST_SCHEDULE),
+            ("dificil",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(delayed_cleanup, CLEANUP_CEST_SCHEDULE),
+            ("limpieza_puestos",),
+        )
+
+    def test_course_schedule_covers_tomorrow_and_both_time_zones(self) -> None:
+        self.assertEqual(
+            scheduled_event_modes(
+                local("2026-09-03T10:58:00"), COURSE_CEST_SCHEDULE
+            ),
+            ("curso",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(
+                local("2026-12-03T10:58:00"), COURSE_CET_SCHEDULE
+            ),
+            ("curso",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(
+                local("2026-12-03T10:58:00"), COURSE_CEST_SCHEDULE
+            ),
+            (),
+        )
+
+    def test_all_cet_variants_are_selected_in_winter(self) -> None:
+        winter = local("2026-12-04T16:45:00")
+        self.assertEqual(
+            scheduled_event_modes(winter, ACCREDITATION_CET_SCHEDULE),
+            ("acreditaciones",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(winter, DIFFICULT_CET_SCHEDULE),
+            ("dificil",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(
+                local("2026-12-05T01:45:00"), CLEANUP_CET_SCHEDULE
+            ),
+            ("limpieza_puestos",),
         )
 
     def test_dedicated_offer_schedule_respects_madrid_dst(self) -> None:
