@@ -23,32 +23,22 @@ ACCREDITATION_HOURS = frozenset({12, 14, 16, 18, 20})
 OFFER_HOURS = frozenset({9, 11, 13, 15, 17, 19, 20})
 DIFFICULT_HOURS = frozenset({9, 11, 13, 15, 17, 19, 21, 23})
 BROAD_SCHEDULE = "20 7-23 * * *"
-START_CEST_SCHEDULE = "20 7,10,13,16,19 * 7-8 1-6"
-COURSE_CEST_SCHEDULE = "20 7,10,13,16,19 * 3-6,9-10 2,4"
-COURSE_CET_SCHEDULE = "20 8,11,14,17,20 * 1-3,10-12 2,4"
-POSITION_CEST_SCHEDULE = "20 7,9,11,13,15,17 * 6-7 *"
-ACCREDITATION_CEST_SCHEDULE = "20 10,12,14,16,18 * 3-7,9-10 5"
-ACCREDITATION_CET_SCHEDULE = "20 11,13,15,17,19 * 1-3,10-12 5"
-OFFER_CEST_SCHEDULE = "7 7,9,11,13,15,17,18 * 1-7,9-12 1,3"
-OFFER_CET_SCHEDULE = "8 8,10,12,14,16,18,19 * 1-7,9-12 1,3"
-DIFFICULT_CEST_SCHEDULE = "20 7,9,11,13,15,17,19,21 * 3-6,9-10 5"
-DIFFICULT_CET_SCHEDULE = "20 8,10,12,14,16,18,20,22 * 1-3,10-12 5"
-CLEANUP_CEST_SCHEDULE = "20 22 * 3-6,9-10 5"
-CLEANUP_CET_SCHEDULE = "20 23 * 1-3,10-12 5"
+START_SCHEDULE = "20 9,12,15,18,21 * 7-8 1-6"
+COURSE_SCHEDULE = "20 9,12,15,18,21 * 1-6,9-12 2,4"
+POSITION_SCHEDULE = "20 9,11,13,15,17,19 * 6-7 *"
+ACCREDITATION_SCHEDULE = "20 12,14,16,18,20 * 1-7,9-12 5"
+OFFER_SCHEDULE = "7 9,11,13,15,17,19,20 * 1-7,9-12 1,3"
+DIFFICULT_SCHEDULE = "20 9,11,13,15,17,19,21,23 * 1-6,9-12 5"
+CLEANUP_SCHEDULE = "20 0 * 1-6,9-12 6"
 
 EXPLICIT_SCHEDULES = {
-    START_CEST_SCHEDULE: ("inicio", 2),
-    COURSE_CEST_SCHEDULE: ("curso", 2),
-    COURSE_CET_SCHEDULE: ("curso", 1),
-    POSITION_CEST_SCHEDULE: ("posiciones", 2),
-    ACCREDITATION_CEST_SCHEDULE: ("acreditaciones", 2),
-    ACCREDITATION_CET_SCHEDULE: ("acreditaciones", 1),
-    OFFER_CEST_SCHEDULE: ("puestos", 2),
-    OFFER_CET_SCHEDULE: ("puestos", 1),
-    DIFFICULT_CEST_SCHEDULE: ("dificil", 2),
-    DIFFICULT_CET_SCHEDULE: ("dificil", 1),
-    CLEANUP_CEST_SCHEDULE: ("limpieza_puestos", 2),
-    CLEANUP_CET_SCHEDULE: ("limpieza_puestos", 1),
+    START_SCHEDULE: "inicio",
+    COURSE_SCHEDULE: "curso",
+    POSITION_SCHEDULE: "posiciones",
+    ACCREDITATION_SCHEDULE: "acreditaciones",
+    OFFER_SCHEDULE: "puestos",
+    DIFFICULT_SCHEDULE: "dificil",
+    CLEANUP_SCHEDULE: "limpieza_puestos",
 }
 
 
@@ -102,11 +92,7 @@ def scheduled_event_modes(
 
     expression = schedule_expression.strip()
     if expression in EXPLICIT_SCHEDULES:
-        current = value.astimezone(MADRID)
-        mode, expected_offset_hours = EXPLICIT_SCHEDULES[expression]
-        offset = current.utcoffset()
-        offset_hours = int(offset.total_seconds() // 3600) if offset else 0
-        return (mode,) if offset_hours == expected_offset_hours else ()
+        return (EXPLICIT_SCHEDULES[expression],)
 
     modes = scheduled_modes(value)
     if expression == BROAD_SCHEDULE:

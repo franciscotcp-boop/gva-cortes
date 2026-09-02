@@ -32,25 +32,28 @@ on:
   schedule:
     # Cada fuente usa un cron identificable. El selector reconoce la expresion
     # aunque GitHub retrase el inicio y la ejecucion cruce a la hora siguiente.
-    # Inicio de curso: julio y agosto, lunes a sabado (CEST).
-    - cron: "20 7,10,13,16,19 * 7-8 1-6"
+    # Todos los turnos se expresan directamente en la hora de Madrid.
+    # Inicio de curso: julio y agosto, lunes a sabado.
+    - cron: "20 9,12,15,18,21 * 7-8 1-6"
+      timezone: "Europe/Madrid"
     # Adjudicaciones continuas: martes y jueves, septiembre-junio.
-    - cron: "20 7,10,13,16,19 * 3-6,9-10 2,4"
-    - cron: "20 8,11,14,17,20 * 1-3,10-12 2,4"
-    # Listas anuales de participantes: junio y julio (CEST).
-    - cron: "20 7,9,11,13,15,17 * 6-7 *"
+    - cron: "20 9,12,15,18,21 * 1-6,9-12 2,4"
+      timezone: "Europe/Madrid"
+    # Listas anuales de participantes: junio y julio.
+    - cron: "20 9,11,13,15,17,19 * 6-7 *"
+      timezone: "Europe/Madrid"
     # Acreditaciones de ingles: viernes, septiembre-julio salvo agosto.
-    - cron: "20 10,12,14,16,18 * 3-7,9-10 5"
-    - cron: "20 11,13,15,17,19 * 1-3,10-12 5"
+    - cron: "20 12,14,16,18,20 * 1-7,9-12 5"
+      timezone: "Europe/Madrid"
     # Puestos ofertados: turnos explicitos para que un retraso de GitHub no los omita.
-    - cron: "7 7,9,11,13,15,17,18 * 1-7,9-12 1,3"
-    - cron: "8 8,10,12,14,16,18,19 * 1-7,9-12 1,3"
+    - cron: "7 9,11,13,15,17,19,20 * 1-7,9-12 1,3"
+      timezone: "Europe/Madrid"
     # Puestos de dificil cobertura: viernes, septiembre-junio.
-    - cron: "20 7,9,11,13,15,17,19,21 * 3-6,9-10 5"
-    - cron: "20 8,10,12,14,16,18,20,22 * 1-3,10-12 5"
+    - cron: "20 9,11,13,15,17,19,21,23 * 1-6,9-12 5"
+      timezone: "Europe/Madrid"
     # Retirada de dificil cobertura al comenzar el sabado.
-    - cron: "20 22 * 3-6,9-10 5"
-    - cron: "20 23 * 1-3,10-12 5"
+    - cron: "20 0 * 1-6,9-12 6"
+      timezone: "Europe/Madrid"
 
 permissions:
   contents: write
