@@ -197,11 +197,27 @@ jobs:
         continue-on-error: true
         run: python scripts/update_offered_positions.py --expire-difficult
 
+      - name: Validar los datos resultantes antes de publicar
+        id: output_validation
+        if: >-
+          always() &&
+          steps.calendar.outputs.run == 'true' &&
+          steps.tests.outcome == 'success' &&
+          steps.adjudicaciones.outcome != 'failure' &&
+          steps.posiciones.outcome != 'failure' &&
+          steps.acreditaciones.outcome != 'failure' &&
+          steps.puestos.outcome != 'failure' &&
+          steps.dificil.outcome != 'failure' &&
+          steps.limpieza_puestos.outcome != 'failure'
+        continue-on-error: true
+        run: python scripts/validate_runtime_data.py
+
       - name: Guardar solamente datos validados
         if: >-
           always() &&
           steps.calendar.outputs.run == 'true' &&
-          steps.tests.outcome == 'success'
+          steps.tests.outcome == 'success' &&
+          steps.output_validation.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -231,9 +247,10 @@ jobs:
           PUESTOS_RESULT: ${{ steps.puestos.outcome }}
           DIFICIL_RESULT: ${{ steps.dificil.outcome }}
           LIMPIEZA_PUESTOS_RESULT: ${{ steps.limpieza_puestos.outcome }}
+          VALIDATION_RESULT: ${{ steps.output_validation.outcome }}
         run: |
           failed=0
-          for result in "$ADJUDICACIONES_RESULT" "$POSICIONES_RESULT" "$ACREDITACIONES_RESULT" "$PUESTOS_RESULT" "$DIFICIL_RESULT" "$LIMPIEZA_PUESTOS_RESULT"; do
+          for result in "$ADJUDICACIONES_RESULT" "$POSICIONES_RESULT" "$ACREDITACIONES_RESULT" "$PUESTOS_RESULT" "$DIFICIL_RESULT" "$LIMPIEZA_PUESTOS_RESULT" "$VALIDATION_RESULT"; do
             if [ "$result" = "failure" ]; then
               failed=1
             fi
