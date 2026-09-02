@@ -20,8 +20,11 @@ ALL_MODES = (
 START_HOURS = frozenset({9, 12, 15, 18, 21})
 POSITION_HOURS = frozenset({9, 11, 13, 15, 17, 19})
 ACCREDITATION_HOURS = frozenset({12, 14, 16, 18, 20})
-OFFER_HOURS = frozenset({9, 11, 13, 15, 17, 19})
+OFFER_HOURS = frozenset({9, 11, 13, 15, 17, 19, 20})
 DIFFICULT_HOURS = frozenset({9, 11, 13, 15, 17, 19, 21, 23})
+BROAD_SCHEDULE = "20 7-23 * * *"
+OFFER_CEST_SCHEDULE = "7 7,9,11,13,15,17,18 * 1-7,9-12 1,3"
+OFFER_CET_SCHEDULE = "8 8,10,12,14,16,18,19 * 1-7,9-12 1,3"
 
 
 def scheduled_modes(value: datetime) -> tuple[str, ...]:
@@ -67,12 +70,43 @@ def scheduled_modes(value: datetime) -> tuple[str, ...]:
     return tuple(modes)
 
 
-def selected_modes(force: str, value: datetime) -> tuple[str, ...]:
+def scheduled_event_modes(
+    value: datetime, schedule_expression: str = ""
+) -> tuple[str, ...]:
+    """Resolve a cron event without depending on GitHub's actual start hour."""
+
+    expression = schedule_expression.strip()
+    if expression in {OFFER_CEST_SCHEDULE, OFFER_CET_SCHEDULE}:
+        current = value.astimezone(MADRID)
+        expected_offset_hours = 2 if expression == OFFER_CEST_SCHEDULE else 1
+        offset = current.utcoffset()
+        offset_hours = int(offset.total_seconds() // 3600) if offset else 0
+        month = current.month
+        offers_in_season = month in {9, 10, 11, 12, 1, 2, 3, 4, 5, 6} or (
+            month == 7 and current.day == 1
+        )
+        if (
+            offset_hours == expected_offset_hours
+            and offers_in_season
+            and current.isoweekday() in {1, 3}
+        ):
+            return ("puestos",)
+        return ()
+
+    modes = scheduled_modes(value)
+    if expression == BROAD_SCHEDULE:
+        return tuple(mode for mode in modes if mode != "puestos")
+    return modes
+
+
+def selected_modes(
+    force: str, value: datetime, schedule_expression: str = ""
+) -> tuple[str, ...]:
     if force == "all":
         return ALL_MODES
     if force in ALL_MODES:
         return (force,)
-    return scheduled_modes(value)
+    return scheduled_event_modes(value, schedule_expression)
 
 
 def explicit_modes(value: str) -> tuple[str, ...]:
@@ -112,6 +146,11 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Lista interna separada por comas usada por el vigilante al recuperar una ejecucion.",
     )
+    parser.add_argument(
+        "--schedule-expression",
+        default="",
+        help="Expresion cron que origino la ejecucion programada.",
+    )
     parser.add_argument("--github-output", type=Path)
     return parser.parse_args()
 
@@ -121,7 +160,11 @@ def main() -> int:
     now = datetime.fromisoformat(args.now) if args.now else datetime.now(MADRID)
     if now.tzinfo is None:
         now = now.replace(tzinfo=MADRID)
-    modes = explicit_modes(args.modes) if args.modes else selected_modes(args.force, now)
+    modes = (
+        explicit_modes(args.modes)
+        if args.modes
+        else selected_modes(args.force, now, args.schedule_expression)
+    )
     output_path = args.github_output
     if output_path is None and os.environ.get("GITHUB_OUTPUT"):
         output_path = Path(os.environ["GITHUB_OUTPUT"])

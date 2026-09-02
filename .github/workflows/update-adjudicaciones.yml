@@ -32,6 +32,10 @@ on:
   schedule:
     # Ventana UTC amplia. El selector aplica las horas exactas de Europe/Madrid.
     - cron: "20 7-23 * * *"
+    # Puestos ofertados: turnos explicitos para que un retraso de GitHub no los omita.
+    # La expresion activa se elige segun el horario CEST/CET de Europe/Madrid.
+    - cron: "7 7,9,11,13,15,17,18 * 1-7,9-12 1,3"
+    - cron: "8 8,10,12,14,16,18,19 * 1-7,9-12 1,3"
 
 permissions:
   contents: write
@@ -64,6 +68,7 @@ jobs:
           python scripts/automation_schedule.py \
             --force "$FORCE_MODE" \
             --modes "$RECOVERY_MODES" \
+            --schedule-expression "${{ github.event.schedule || '' }}" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Mostrar calendario aplicado

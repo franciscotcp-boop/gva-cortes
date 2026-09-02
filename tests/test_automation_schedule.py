@@ -9,7 +9,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from automation_schedule import ALL_MODES, MADRID, explicit_modes, scheduled_modes, selected_modes
+from automation_schedule import (
+    ALL_MODES,
+    BROAD_SCHEDULE,
+    MADRID,
+    OFFER_CEST_SCHEDULE,
+    OFFER_CET_SCHEDULE,
+    explicit_modes,
+    scheduled_event_modes,
+    scheduled_modes,
+    selected_modes,
+)
 
 
 def local(value: str) -> datetime:
@@ -59,6 +69,40 @@ class AutomationScheduleTests(unittest.TestCase):
             ("puestos",),
         )
         self.assertNotIn("puestos", scheduled_modes(local("2026-09-03T11:00:00")))
+
+    def test_offered_positions_include_a_closing_check_at_20(self) -> None:
+        self.assertEqual(
+            scheduled_modes(local("2026-09-02T20:00:00")),
+            ("puestos",),
+        )
+
+    def test_dedicated_offer_schedule_survives_a_delayed_start(self) -> None:
+        self.assertEqual(
+            scheduled_event_modes(
+                local("2026-09-02T18:34:00"), OFFER_CEST_SCHEDULE
+            ),
+            ("puestos",),
+        )
+        self.assertNotIn(
+            "puestos",
+            scheduled_event_modes(
+                local("2026-09-02T19:20:00"), BROAD_SCHEDULE
+            ),
+        )
+
+    def test_dedicated_offer_schedule_respects_madrid_dst(self) -> None:
+        self.assertEqual(
+            scheduled_event_modes(
+                local("2026-12-02T20:45:00"), OFFER_CET_SCHEDULE
+            ),
+            ("puestos",),
+        )
+        self.assertEqual(
+            scheduled_event_modes(
+                local("2026-12-02T20:45:00"), OFFER_CEST_SCHEDULE
+            ),
+            (),
+        )
 
     def test_offered_positions_include_only_the_first_day_of_july(self) -> None:
         self.assertEqual(

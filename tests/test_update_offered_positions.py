@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from offered_positions import (
     ITEM_FIELDS,
     build_payload,
+    clean_extracted_center_name,
     has_english_requirement,
     remove_english_requirement,
 )
@@ -84,6 +85,18 @@ def published_payload(publication_date: str, items: list[list], sha: str) -> dic
 
 
 class OfferedPositionLinkTests(unittest.TestCase):
+    def test_removes_slot_id_overlapping_an_unknown_center_name(self) -> None:
+        self.assertEqual(
+            clean_extracted_center_name(
+                "EXTENSIÓN DEL CFPA DE ORIHUELA 858323", "858323"
+            ),
+            "EXTENSIÓN DEL CFPA DE ORIHUELA",
+        )
+        self.assertEqual(
+            clean_extracted_center_name("IES NÚMERO 6", "123456"),
+            "IES NÚMERO 6",
+        )
+
     def test_recognizes_both_offered_position_english_markers(self) -> None:
         self.assertTrue(has_english_requirement("ING-B2"))
         self.assertTrue(has_english_requirement("11,5 / ING."))
@@ -208,6 +221,44 @@ class OfferedPositionUpdateTests(unittest.TestCase):
         self.assertEqual(saved["items"][0][0], 1)
         self.assertEqual(saved["items"][0][7], "000003")
         self.assertEqual(saved["items"][0][15], "2026-09-09")
+
+    def test_same_date_correction_with_new_content_replaces_snapshot(self) -> None:
+        self.output.write_text(
+            json.dumps(
+                published_payload("2026-09-09", [sample_item(1)], "old-content")
+            ),
+            encoding="utf-8",
+        )
+        page_url = "https://ceice.gva.es/pagina"
+        pdf_url = "https://ceice.gva.es/docs/260909_pue_prov.pdf"
+        html = f'<a href="{pdf_url}">Puestos ofertados</a>'.encode()
+        correction = published_payload(
+            "2026-09-09",
+            [sample_item(2, snapshot_date="2026-09-09")],
+            "corrected-content",
+        )
+
+        with patch(
+            "update_offered_positions.parse_downloaded_pdf",
+            return_value=correction,
+        ):
+            result = update_from_page(
+                page_url=page_url,
+                output=self.output,
+                specialties_path=self.specialties,
+                centers_path=self.centers,
+                target_year="2026-2027",
+                fetch=lambda url: html if url == page_url else b"%PDF-corrected",
+            )
+
+        saved = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(result["result"], "updated")
+        self.assertEqual(len(saved["items"]), 1)
+        self.assertEqual(saved["items"][0][7], "000002")
+        self.assertEqual(
+            saved["snapshots"]["ordinary"]["source"]["sha256"],
+            "corrected-content",
+        )
 
     def test_new_course_without_pdf_clears_previous_snapshot(self) -> None:
         old = published_payload("2026-06-02", [sample_item(1)], "old")

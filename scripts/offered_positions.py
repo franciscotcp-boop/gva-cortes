@@ -164,6 +164,14 @@ def extract_slot_id(page: pdfplumber.page.Page, row: dict[str, Any]) -> str | No
     return slot_id if re.fullmatch(r"\d{6}", slot_id) else None
 
 
+def clean_extracted_center_name(name: str, slot_id: str | None) -> str:
+    """Remove a slot id that visually overlaps the PDF's center-name column."""
+    cleaned = compact_text(name)
+    if slot_id:
+        cleaned = re.sub(rf"\s+{re.escape(slot_id)}$", "", cleaned).strip()
+    return cleaned
+
+
 def context_lines(page: pdfplumber.page.Page) -> list[dict[str, Any]]:
     return page.extract_text_lines(
         layout=False,
@@ -243,8 +251,10 @@ def parse_pdf(
 
                 municipality = center_match.group(1).strip()
                 center_code = center_match.group(2)
-                extracted_center_name = center_match.group(3).strip()
                 slot_id = extract_slot_id(page, row)
+                extracted_center_name = clean_extracted_center_name(
+                    center_match.group(3), slot_id
+                )
                 center_name_pdf = center_names.get(center_code, extracted_center_name)
                 requirement = row_text(page, row, 327, 454)
                 itinerary = row_text(page, row, 454, 618)
@@ -464,7 +474,9 @@ def parse_difficult_pdf(
 
                 municipality = center_match.group(1).strip()
                 center_code = center_match.group(2)
-                extracted_center_name = center_match.group(3).strip()
+                extracted_center_name = clean_extracted_center_name(
+                    center_match.group(3), slot_id
+                )
                 hours_raw = column_text(page, 360, 402, crop_top, row_bottom)
                 itinerary_raw = column_text(page, 402, 445, crop_top, row_bottom)
                 placement_raw = column_text(page, 445, 512, crop_top, row_bottom)

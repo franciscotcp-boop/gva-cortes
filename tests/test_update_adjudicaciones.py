@@ -40,8 +40,10 @@ class CenterOverrideTests(unittest.TestCase):
         rows = updater.load_center_overrides()
         codes = [str(row[0]) for row in rows]
 
-        self.assertEqual(len(rows), 21)
+        self.assertEqual(len(rows), 23)
         self.assertEqual(len(codes), len(set(codes)))
+        self.assertIn("03017382", codes)
+        self.assertIn("03017436", codes)
         self.assertIn("03021750", codes)
         self.assertIn("03022092", codes)
         self.assertIn("12008624", codes)

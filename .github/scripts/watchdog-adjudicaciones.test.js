@@ -149,6 +149,7 @@ test("de septiembre a junio vigila adjudicaciones y puestos ofertados", () => {
   assert.equal(shouldMonitor(new Date("2026-09-03T10:30:00Z"), "schedule"), true);
   assert.equal(shouldMonitor(new Date("2026-09-02T09:30:00Z"), "schedule"), true);
   assert.deepEqual(calendarModes(new Date("2026-09-02T09:30:00Z")), ["puestos"]);
+  assert.deepEqual(calendarModes(new Date("2026-09-02T18:00:00Z")), ["puestos"]);
 });
 
 test("los puestos ofertados terminan el uno de julio", () => {

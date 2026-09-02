@@ -7,7 +7,7 @@ const FAILURE_ISSUE_TITLE = "[AdjudicApp] Recuperacion automatica fallida";
 const START_HOURS = new Set([9, 12, 15, 18, 21]);
 const POSITION_HOURS = new Set([9, 11, 13, 15, 17, 19]);
 const ACCREDITATION_HOURS = new Set([12, 14, 16, 18, 20]);
-const OFFER_HOURS = new Set([9, 11, 13, 15, 17, 19]);
+const OFFER_HOURS = new Set([9, 11, 13, 15, 17, 19, 20]);
 const DIFFICULT_HOURS = new Set([9, 11, 13, 15, 17, 19, 21, 23]);
 
 function envBoolean(value) {
