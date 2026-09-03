@@ -129,11 +129,12 @@ MASTER_SPECIALTY_POSITION_ALIASES = {
 }
 
 MASTER_CUT_POSITION_POLICY = {
-    "version": 1,
+    "version": 2,
     "general_field": "master_general_positions.position_after_adjudication",
     "specialty_field": "positions.position_after_adjudication",
     "specialty_aliases": MASTER_SPECIALTY_POSITION_ALIASES,
     "source": "data/posiciones_bolsa.json",
+    "continuous_source": "La identidad del docente se concilia con el orden completo del PDF continuo antes de publicar la posicion de especialidad.",
     "previous_course_policy": "No se mezclan posiciones de especialidad del curso nuevo con adjudicaciones continuas pertenecientes al curso anterior.",
 }
 
@@ -231,6 +232,14 @@ class Adjudication:
 
 
 @dataclass
+class StatusRecord:
+    position: int
+    candidate_name: str
+    specialty_code: str | None
+    status: str
+
+
+@dataclass
 class ParsedPdf:
     url: str
     sha256: str
@@ -238,6 +247,7 @@ class ParsedPdf:
     published_date: str | None
     rows: list[list]
     assignments: list[Adjudication] = field(default_factory=list)
+    statuses: list[StatusRecord] = field(default_factory=list)
 
 
 def now_local() -> datetime:
@@ -924,7 +934,7 @@ def detect_observations(block: list[str]) -> str:
 
         # What remains after removing the fixed row labels is the optional
         # observation printed by Conselleria (PROA+, PCT, centre singular...).
-        value = re.sub(r"(?i)(?:^|\s)/\s*ING\.?\b", " ", value)
+        value = re.sub(r"(?i)(?:^|\s)/\s*[A-Z]{3}\.?\b", " ", value)
         value = re.sub(r"(?i)\b\d{1,2}(?:[.,]\d+)?\s*(?:hores?|horas?)\b", " ", value)
         value = re.sub(r"(?i)\bjornada\s+completa\b", " ", value)
         value = re.sub(
@@ -951,6 +961,38 @@ def candidate_name_from_line(line: str, match_cut: re.Match[str]) -> str:
         flags=re.IGNORECASE,
     )[0]
     return clean(value)
+
+
+def parse_status_block(
+    block: list[str],
+    body: str,
+    page_specialty: tuple[str, str] | None = None,
+) -> StatusRecord | None:
+    if not block:
+        return None
+    match_cut = re.match(r"^(\d{1,5})(?:\s*/\s*\d{1,5})?\s+", block[0])
+    if not match_cut:
+        return None
+    text = norm(" ".join(block[1:]))
+    if "desactivat" in text or "desactivado" in text or "desactivada" in text:
+        status = "D"
+    elif "no ha participat" in text or "no ha participado" in text:
+        status = "N"
+    elif re.search(r"\bno\s+adjudicat", text) or re.search(r"\bno\s+adjudicad", text):
+        status = "N"
+    elif "ha participat" in text or "ha participado" in text:
+        status = "P"
+    elif re.search(r"\badjudicat\b", text) or re.search(r"\badjudicad[oa]\b", text):
+        status = "A"
+    else:
+        return None
+    specialty_code = page_specialty[0] if body == "secundaria" and page_specialty else None
+    return StatusRecord(
+        position=int(match_cut.group(1)),
+        candidate_name=candidate_name_from_line(block[0], match_cut),
+        specialty_code=specialty_code,
+        status=status,
+    )
 
 
 def parse_block(
@@ -1011,6 +1053,7 @@ def parse_pdf(
 ) -> ParsedPdf | None:
     sha = hashlib.sha256(pdf_bytes).hexdigest()
     rows: list[Adjudication] = []
+    statuses: list[StatusRecord] = []
     body: str | None = None
     published_date: str | None = None
 
@@ -1029,26 +1072,34 @@ def parse_pdf(
                 raise ValueError(f"No se pudo leer la especialidad del encabezado en la pagina {page_number}")
 
             current: list[str] = []
+
+            def consume_block(block: list[str]) -> None:
+                status = parse_status_block(block, body, page_specialty)
+                if status:
+                    statuses.append(status)
+                adjudication = parse_block(block, body, page_specialty)
+                if adjudication:
+                    rows.append(adjudication)
+
             for raw_line in text.splitlines():
                 line = clean(raw_line)
                 if not line:
                     continue
                 if CANDIDATE_RE.match(line):
-                    parsed = parse_block(current, body, page_specialty)
-                    if parsed:
-                        rows.append(parsed)
+                    consume_block(current)
                     current = [line]
                 elif current:
                     current.append(line)
-            parsed = parse_block(current, body, page_specialty)
-            if parsed:
-                rows.append(parsed)
+            consume_block(current)
             if page_number % 250 == 0 or page_number == total_pages:
                 print(
                     f"{body}: procesadas {page_number}/{total_pages} paginas "
                     f"({len(rows)} adjudicaciones validas)",
                     flush=True,
                 )
+
+    if len(statuses) < 1000:
+        raise ValueError(f"El PDF de {body} solo contiene {len(statuses)} estados validos")
 
     valid_rows = [row for row in rows if owning_body_for_specialty(row.specialty_code) == body]
     best: OrderedDict[tuple[str, str], Adjudication] = OrderedDict()
@@ -1063,7 +1114,7 @@ def parse_pdf(
     for row in best.values():
         center = centers_by_code.get(row.center_code)
         specialty_position = None
-        if row.body == "maestros" and mode == "inicio" and master_positions is not None:
+        if row.body == "maestros" and mode in {"inicio", "curso"} and master_positions is not None:
             specialty_position = master_positions.resolve(
                 row.cut,
                 row.specialty_code,
@@ -1099,12 +1150,21 @@ def parse_pdf(
         published_date=published_date,
         rows=output,
         assignments=assignments,
+        statuses=statuses,
     )
 
 
 def pdf_already_processed(data: dict, parsed: ParsedPdf) -> bool:
     current = data["processed_pdfs"].get(parsed.url)
-    return bool(current and current.get("sha256") == parsed.sha256)
+    if current and current.get("sha256") == parsed.sha256:
+        return True
+    return any(
+        isinstance(item, dict)
+        and item.get("sha256") == parsed.sha256
+        and item.get("body") == parsed.body
+        and item.get("mode") in {"inicio", "curso"}
+        for item in data.get("processed_pdfs", {}).values()
+    )
 
 
 def url_already_seen(data: dict, url: str) -> bool:
@@ -1236,13 +1296,28 @@ def enrich_master_cut_positions(data: dict, positions: MasterCutPositionIndex | 
         changed = True
 
     curso = data.setdefault("cuts", {}).setdefault("curso", {})
+    course_school_year = normalized_school_year(curso.get("school_year"))
+    has_current_course_pdf = any(
+        school_year_for_date(str(item.get("published_date")), now_local()) == course_school_year
+        for item in curso.get("pdfs", [])
+        if isinstance(item, dict) and item.get("published_date") and course_school_year
+    )
     course_rows: list[list] = []
     for raw in curso.setdefault("rows", []):
         origin = row_origin(raw, "inicio")
         row = row_with_origin(raw, origin)
         value = None
-        if len(row) >= 7 and str(row[6]) == "maestros" and origin == "inicio":
-            value = start_values.get(row_key(row))
+        if len(row) >= 7 and str(row[6]) == "maestros":
+            if origin == "inicio":
+                value = start_values.get(row_key(row))
+            elif (
+                origin == "curso"
+                and has_current_course_pdf
+                and course_school_year == positions.academic_year
+            ):
+                value = positive_integer(row[11]) or positions.resolve(
+                    row[2], row[1], course_school_year
+                )
         if row[11] != value:
             row[11] = value
             changed = True
@@ -1626,7 +1701,17 @@ def apply_curso(data: dict, parsed_items: list[ParsedPdf]) -> bool:
     curso = data["cuts"]["curso"]
     current_year = school_year_for_date(parsed_items[-1].published_date, now_local())
     inicio = data["cuts"]["inicio"]
-    if curso.get("school_year") != current_year:
+    has_current_course_history = any(
+        school_year_for_date(str(item.get("published_date")), now_local()) == current_year
+        for item in curso.get("pdfs", [])
+        if isinstance(item, dict) and item.get("published_date")
+    )
+    first_current_course_publication = not has_current_course_history and any(
+        school_year_for_date(item.published_date, now_local()) == current_year
+        for item in parsed_items
+        if item.published_date
+    )
+    if curso.get("school_year") != current_year or first_current_course_publication:
         curso.update({"school_year": current_year, "updated_at": None, "rows": [], "pdfs": []})
     seed_rows = curso.get("rows") or (inicio.get("rows", []) if inicio.get("school_year") == current_year else [])
     rows_by_key = {row_key(row): row_with_origin(row, row_origin(row, "inicio")) for row in seed_rows}
@@ -1673,6 +1758,33 @@ def link_points_outside_target_year(link: dict[str, str], target_school_year: st
     return False
 
 
+def enrich_current_master_cut_positions(
+    parsed_items: list[ParsedPdf],
+    position_context: PositionContextUpdater,
+) -> tuple[int, int]:
+    resolved = 0
+    total = 0
+    for parsed in parsed_items:
+        if parsed.body != "maestros":
+            continue
+        specialty_positions = {
+            (assignment.center_code, assignment.specialty_code, int(assignment.cut)): position
+            for assignment in parsed.assignments
+            if (position := position_context.master_specialty_position(assignment)) is not None
+        }
+        for row in parsed.rows:
+            total += 1
+            key = (str(row[0]), str(row[1]), int(row[2]))
+            value = specialty_positions.get(key)
+            if value is None:
+                continue
+            while len(row) < 11:
+                row.append(None)
+            row[10] = value
+            resolved += 1
+    return resolved, total
+
+
 def run_mode(
     data: dict,
     mode: str,
@@ -1716,6 +1828,9 @@ def run_mode(
                     changed = True
                     continue
             if pdf_already_processed(data, parsed):
+                if parsed.url not in data.get("processed_pdfs", {}):
+                    mark_processed(data, parsed, mode)
+                    changed = True
                 continue
             parsed_items.append(parsed)
             print(f"{mode}: nuevo PDF {parsed.body} {parsed.published_date or 'sin fecha'} {link['url']} filas={len(parsed.rows)}")
@@ -1745,6 +1860,15 @@ def run_mode(
             )
     if position_context is not None and parsed_items:
         position_context.apply(parsed_items, mode)
+        if mode == "curso":
+            resolved, total = enrich_current_master_cut_positions(parsed_items, position_context)
+            if total and resolved != total:
+                raise RuntimeError(
+                    "No se pudieron resolver todas las posiciones por especialidad de Maestros: "
+                    f"{resolved}/{total}"
+                )
+            if resolved:
+                result = apply_curso(data, parsed_items) or result
     if mode == "curso" and parsed_items:
         adjudication_date = max(
             str(item.published_date or "") for item in parsed_items

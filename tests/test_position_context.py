@@ -49,11 +49,27 @@ def assignment(
     )
 
 
-def parsed(date: str, body: str, assignments: list[SimpleNamespace], suffix: str = "1") -> SimpleNamespace:
+def status(name: str, code: str | None, order: int, value: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        candidate_name=name,
+        specialty_code=code,
+        position=order,
+        status=value,
+    )
+
+
+def parsed(
+    date: str,
+    body: str,
+    assignments: list[SimpleNamespace],
+    suffix: str = "1",
+    statuses: list[SimpleNamespace] | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         published_date=date,
         body=body,
         assignments=assignments,
+        statuses=statuses or [],
         url=f"https://example.test/{body}-{suffix}.pdf",
         sha256=f"sha-{body}-{suffix}",
     )
@@ -83,6 +99,8 @@ class PositionContextTests(unittest.TestCase):
                 ["Gemma", "VIZCAINO SANCHIS, GEMMA", [position("3A1", 6, 4)], "otros", None],
                 ["Salvador", "MARTINEZ GUIJARRO, SALVADOR", [position("3A1", 8, 6, [9, 9, 9, {"old": True}, [1, 2, 3, 4]])], "otros", None],
                 ["David", "MARTINEZ MARTINEZ, DAVID", [position("3A1", 9, 7), position("3A9", 3, 2)], "otros", None],
+                ["Lucia", "ARCE RAMOS, LUCIA", [position("127", 20, 14)], "maestros", [25, 14]],
+                ["Maria Nieves", "FERNANDEZ CASTILLO, MARIA NIEVES", [position("2B9", 3, 1)], "otros", None],
             ],
             "additional_information": {
                 "future_history_available": False,
@@ -239,6 +257,114 @@ class PositionContextTests(unittest.TestCase):
         detail = self.load_positions()["people"][0][2][0][9]
         self.assertEqual(detail[:5], ["C", "2026-09-08", "sub_indeterminada", 18, "46000001"])
         self.assertEqual(detail[7:], ["IES de prueba", "Valencia", ""])
+
+    def test_master_fpa_alias_is_attached_to_the_registered_specialty_card(self) -> None:
+        updater = PositionContextUpdater(self.positions_path, self.state_path)
+        updater.apply(
+            [
+                parsed(
+                    "2026-09-03",
+                    "maestros",
+                    [assignment("ARCE RAMOS, LUCIA", "152", "46022221", 14, "maestros")],
+                )
+            ],
+            "curso",
+        )
+        updater.save()
+
+        card = self.load_positions()["people"][3][2][0]
+        self.assertEqual(card[8], "A")
+        self.assertEqual(card[9][0], "C")
+        self.assertEqual(card[9][4], "46022221")
+
+    def test_secondary_specialty_suffix_does_not_break_identity_matching(self) -> None:
+        updater = PositionContextUpdater(self.positions_path, self.state_path)
+        updater.apply(
+            [
+                parsed(
+                    "2026-09-03",
+                    "secundaria",
+                    [
+                        assignment(
+                            "FERNANDEZ CASTILLO, MARIA NIEVES ( Esp: 358 )",
+                            "2B9",
+                            "46000001",
+                            1,
+                        )
+                    ],
+                )
+            ],
+            "curso",
+        )
+        updater.save()
+
+        card = self.load_positions()["people"][4][2][0]
+        self.assertEqual(card[8], "A")
+        self.assertEqual(card[9][4], "46000001")
+
+    def test_continuous_snapshot_updates_positions_statuses_and_new_profiles(self) -> None:
+        updater = PositionContextUpdater(self.positions_path, self.state_path)
+        updater.apply(
+            [
+                parsed(
+                    "2026-09-03",
+                    "secundaria",
+                    [
+                        assignment("VIZCAINO SANCHIS, GEMMA", "3A1", "03010442", 1),
+                        assignment("DURAN GIL, TANIA", "6A2", "03011458", 1),
+                    ],
+                    statuses=[
+                        status("VIZCAINO SANCHIS, GEMMA", "3A1", 1, "A"),
+                        status("MARTINEZ GUIJARRO, SALVADOR", "3A1", 2, "D"),
+                        status("MARTINEZ MARTINEZ, DAVID", "3A1", 3, "N"),
+                        status("DURAN GIL, TANIA", "6A2", 1, "A"),
+                    ],
+                )
+            ],
+            "curso",
+        )
+        updater.save()
+
+        data = self.load_positions()
+        self.assertEqual(data["reference_stage"], "adjudicacion_continua")
+        self.assertEqual(data["reference_date"], "2026-09-03")
+        self.assertEqual(data["people"][0][2][0][3:5], [1, 1])
+        self.assertEqual(data["people"][0][2][0][8], "A")
+        self.assertEqual(data["people"][1][2][0][3:5], [2, 2])
+        self.assertEqual(data["people"][1][2][0][8], "D")
+        self.assertEqual(data["people"][2][2][0][3:5], [3, 2])
+        self.assertEqual(data["people"][2][2][0][8], "N")
+        tania = next(person for person in data["people"] if person[1] == "DURAN GIL, TANIA")
+        self.assertEqual(tania[2][0][0], "6A2")
+        self.assertEqual(tania[2][0][3], 1)
+        self.assertEqual(tania[2][0][8], "A")
+        self.assertEqual(tania[2][0][9][:5], ["C", "2026-09-03", "vacante", "C", "03011458"])
+
+    def test_cross_specialty_duplicate_uses_the_non_awarded_row(self) -> None:
+        updater = PositionContextUpdater(self.positions_path, self.state_path)
+        updater.apply(
+            [
+                parsed(
+                    "2026-09-03",
+                    "secundaria",
+                    [],
+                    statuses=[
+                        status("VIZCAINO SANCHIS, GEMMA", "3A1", 1, "A"),
+                        status("VIZCAINO SANCHIS, GEMMA", "3A1", 2, "N"),
+                    ],
+                )
+            ],
+            "curso",
+        )
+        updater.save()
+
+        data = self.load_positions()
+        self.assertEqual(data["people"][0][2][0][3], 2)
+        self.assertEqual(data["people"][0][2][0][8], "N")
+        self.assertEqual(
+            data["continuous_snapshot"]["secondary_cross_specialty_duplicates_ignored"],
+            1,
+        )
 
     def test_legacy_province_state_is_migrated_without_losing_rows(self) -> None:
         legacy_fields = [

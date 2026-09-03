@@ -530,6 +530,31 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertIsNotNone(row)
         self.assertFalse(row.english_requirement)
 
+    def test_other_language_marker_is_not_published_as_an_observation(self) -> None:
+        block = [
+            "23 DOCENTE, PRUEBA",
+            "900001 ALMASSORA(12000251)IES ALVARO FALOMIR",
+            "211 / ANGLES",
+            "/ FRA. Jornada completa VACANT Adjudicat",
+        ]
+        row = updater.parse_block(block, "secundaria", ("211", "ANGLES"))
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row.observations, "")
+
+    def test_status_block_keeps_the_current_rank_and_pool_specialty(self) -> None:
+        record = updater.parse_status_block(
+            ["23 DOCENTE, PRUEBA", "Ha participat"],
+            "secundaria",
+            ("3A1", "CUINA I PASTISSERIA"),
+        )
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record.position, 23)
+        self.assertEqual(record.candidate_name, "DOCENTE, PRUEBA")
+        self.assertEqual(record.specialty_code, "3A1")
+        self.assertEqual(record.status, "P")
+
 
 class VacancyTotalsTests(unittest.TestCase):
     @staticmethod
@@ -715,6 +740,65 @@ class StartFallbackTests(unittest.TestCase):
         rows = {updater.row_key(row): row for row in data["cuts"]["curso"]["rows"]}
         self.assertTrue(rows["46020297|3A1|secundaria"][9])
         self.assertEqual(rows["03000001|3A1|secundaria"][8], "curso")
+
+    def test_first_current_course_pdf_drops_previous_course_overrides(self) -> None:
+        start_one = [
+            "03000001", "128", 100, "PRIMARIA", "CEIP UNO", "ALACANT",
+            "maestros", "vacante", "inicio", False, False, 80,
+        ]
+        start_two = [
+            "03000002", "128", 200, "PRIMARIA", "CEIP DOS", "ELX",
+            "maestros", "vacante", "inicio", False, False, 160,
+        ]
+        previous_course = [
+            "03000002", "128", 250, "PRIMARIA", "CEIP DOS", "ELX",
+            "maestros", "sub_indeterminada", "curso", False, False, None,
+        ]
+        previous_only = [
+            "03000003", "128", 300, "PRIMARIA", "CEIP TRES", "ALCOI",
+            "maestros", "sub_determinada", "curso", False, False, None,
+        ]
+        current = [
+            "03000004", "128", 350, "PRIMARIA", "CEIP CUATRO", "DENIA",
+            "maestros", "vacante", False, False, 280,
+        ]
+        data = {
+            "cuts": {
+                "inicio": {
+                    "school_year": "2026-2027",
+                    "updated_at": "2026-07-15",
+                    "rows": [start_one, start_two],
+                },
+                "curso": {
+                    "school_year": "2026-2027",
+                    "updated_at": "2026-06-02",
+                    "rows": [start_one, previous_course, previous_only],
+                    "pdfs": [{"published_date": "2026-06-02", "body": "maestros"}],
+                },
+            },
+            "processed_pdfs": {},
+        }
+        parsed = updater.ParsedPdf(
+            "https://example.test/260903_lis_mae.pdf",
+            "sha-current",
+            "maestros",
+            "2026-09-03",
+            [current],
+            [],
+        )
+
+        self.assertTrue(updater.apply_curso(data, [parsed]))
+
+        rows = {updater.row_key(row): row for row in data["cuts"]["curso"]["rows"]}
+        self.assertEqual(set(rows), {
+            "03000001|128|maestros",
+            "03000002|128|maestros",
+            "03000004|128|maestros",
+        })
+        self.assertEqual(rows["03000002|128|maestros"][8], "inicio")
+        self.assertEqual(rows["03000004|128|maestros"][8], "curso")
+        self.assertEqual(data["cuts"]["curso"]["updated_at"], "2026-09-03")
+        self.assertEqual(len(data["cuts"]["curso"]["pdfs"]), 1)
 
 
 class CutSchemaTests(unittest.TestCase):
