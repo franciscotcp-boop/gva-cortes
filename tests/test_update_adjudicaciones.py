@@ -911,6 +911,76 @@ class MasterCutPositionTests(unittest.TestCase):
         self.assertIsNone(index.resolve(4951, "126", "2025-2026"))
         self.assertIsNone(index.resolve(4951, "206", "2026-2027"))
 
+    def test_continuous_snapshot_resolves_duplicate_general_rank_by_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.positions_file(Path(tmp))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["reference_stage"] = "adjudicacion_continua"
+            payload["position_reference"] = {
+                "kind": "adjudicacion_continua",
+                "academic_year": "2026/2027",
+                "date": "2026-09-03",
+            }
+            payload["people"].append([
+                "Aina Jorda Blasco",
+                "JORDA BLASCO, AINA",
+                [["126", 2686, 2345, 1397]],
+                "maestros",
+                [10167, 4951],
+                "f",
+            ])
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            index = updater.MasterCutPositionIndex(path)
+
+        self.assertIn((4951, "126"), index.ambiguous_general_specialties)
+        self.assertIsNone(index.resolve(4951, "126", "2026-2027"))
+        self.assertEqual(
+            index.resolve(
+                4951,
+                "126",
+                "2026-2027",
+                "ADSUAR MAS, TERESA MERCEDES",
+            ),
+            489,
+        )
+        self.assertEqual(
+            index.resolve(4951, "126", "2026-2027", "JORDA BLASCO, AINA"),
+            1397,
+        )
+
+    def test_existing_cut_position_survives_a_mixed_continuous_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.positions_file(Path(tmp))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["reference_stage"] = "adjudicacion_continua"
+            payload["people"].append([
+                "Aina Jorda Blasco",
+                "JORDA BLASCO, AINA",
+                [["126", 2686, 2345, 1397]],
+                "maestros",
+                [10167, 4951],
+                "f",
+            ])
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            index = updater.MasterCutPositionIndex(path)
+
+        stored = [
+            "03004715", "126", 4951, "AL", "CEIP", "ELX", "maestros",
+            "vacante", "inicio", False, False, 489,
+        ]
+        data = {
+            "cuts": {
+                "inicio": {"school_year": "2026-2027", "rows": [stored]},
+                "curso": {"school_year": "2026-2027", "rows": [stored], "pdfs": []},
+            }
+        }
+
+        updater.enrich_master_cut_positions(data, index)
+
+        self.assertEqual(data["cuts"]["inicio"]["rows"][0][11], 489)
+        self.assertEqual(data["cuts"]["curso"]["rows"][0][11], 489)
+
     def test_enrichment_applies_only_to_current_master_start_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = updater.MasterCutPositionIndex(self.positions_file(Path(tmp)))
@@ -941,6 +1011,43 @@ class MasterCutPositionTests(unittest.TestCase):
         self.assertIsNone(start_rows["03000000|206|secundaria"][11])
         self.assertEqual(course_rows[("03004715|126|maestros", "inicio")][11], 489)
         self.assertIsNone(course_rows[("03011111|126|maestros", "curso")][11])
+
+
+class DuplicatePdfTests(unittest.TestCase):
+    def test_known_sha_is_registered_without_parsing_the_pdf_again(self) -> None:
+        content = b"same-pdf"
+        sha256 = updater.hashlib.sha256(content).hexdigest()
+        original_url = "https://example.test/manual#260903_lis_mae.pdf"
+        official_url = "https://example.test/260903_lis_mae.pdf"
+        data = json.loads(json.dumps(updater.DEFAULT_DATA))
+        data["processed_pdfs"] = {
+            original_url: {
+                "sha256": sha256,
+                "mode": "curso",
+                "body": "maestros",
+                "published_date": "2026-09-03",
+                "rows": 1226,
+            }
+        }
+
+        with patch.object(
+            updater,
+            "extract_pdf_links",
+            return_value=[{"url": official_url, "text": "Listado 03/09/2026"}],
+        ), patch.object(updater, "http_get", return_value=content), patch.object(
+            updater, "parse_pdf"
+        ) as parse_pdf:
+            changed = updater.run_mode(
+                data,
+                "curso",
+                {},
+                "2026-2027",
+            )
+
+        self.assertTrue(changed)
+        parse_pdf.assert_not_called()
+        self.assertEqual(data["processed_pdfs"][official_url]["duplicate_of"], original_url)
+        self.assertEqual(data["processed_pdfs"][official_url]["body"], "maestros")
 
 
 if __name__ == "__main__":

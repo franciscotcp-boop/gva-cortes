@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 import pdfplumber
 
-from position_context import PositionContextUpdater
+from position_context import PositionContextUpdater, normalized_name
 from update_offered_positions import (
     enrich_assignments_from_offers,
     reconcile_after_adjudication,
@@ -129,12 +129,14 @@ MASTER_SPECIALTY_POSITION_ALIASES = {
 }
 
 MASTER_CUT_POSITION_POLICY = {
-    "version": 2,
+    "version": 3,
     "general_field": "master_general_positions.position_after_adjudication",
     "specialty_field": "positions.position_after_adjudication",
     "specialty_aliases": MASTER_SPECIALTY_POSITION_ALIASES,
     "source": "data/posiciones_bolsa.json",
+    "lookup_priority": "Primero identidad oficial del docente y especialidad; la posicion general se usa solo cuando pertenece a una instantanea no acumulativa y es univoca.",
     "continuous_source": "La identidad del docente se concilia con el orden completo del PDF continuo antes de publicar la posicion de especialidad.",
+    "mixed_snapshot_policy": "Las posiciones ya publicadas se conservan y nunca se recalculan desde una clave general ambigua que mezcle estados de distintas adjudicaciones.",
     "previous_course_policy": "No se mezclan posiciones de especialidad del curso nuevo con adjudicaciones continuas pertenecientes al curso anterior.",
 }
 
@@ -518,6 +520,9 @@ class MasterCutPositionIndex:
         self.enabled = False
         self.academic_year: str | None = None
         self.by_general_specialty: dict[tuple[int, str], int] = {}
+        self.by_identity_specialty: dict[tuple[str, str], tuple[tuple[int, int], ...]] = {}
+        self.ambiguous_general_specialties: set[tuple[int, str]] = set()
+        self.general_fallback_enabled = True
         if not self.path.exists():
             print(f"Posiciones de corte de Maestros: omitidas; no existe {self.path}")
             return
@@ -532,11 +537,23 @@ class MasterCutPositionIndex:
         position_fields = data.get("position_fields")
         general_fields = data.get("master_general_position_fields")
         person_positions_index = metadata_field_index(person_fields, "positions", 2)
+        person_name_index = metadata_field_index(person_fields, "official_name", 1)
         person_source_index = metadata_field_index(person_fields, "source", 3)
         person_general_index = metadata_field_index(person_fields, "master_general_positions", 4)
         specialty_code_index = metadata_field_index(position_fields, "specialty_code", 0)
         specialty_after_index = metadata_field_index(position_fields, "position_after_adjudication", 3)
         general_after_index = metadata_field_index(general_fields, "position_after_adjudication", 1)
+        reference = data.get("position_reference")
+        reference_kind = str(data.get("reference_stage") or "")
+        if not reference_kind and isinstance(reference, dict):
+            reference_kind = str(reference.get("kind") or "")
+        self.general_fallback_enabled = reference_kind not in {
+            "adjudicacion_continua",
+            "durante_curso",
+        }
+
+        general_candidates: dict[tuple[int, str], set[int]] = {}
+        identity_candidates: dict[tuple[str, str], set[tuple[int, int]]] = {}
 
         for person in data.get("people", []):
             if not isinstance(person, list):
@@ -551,6 +568,9 @@ class MasterCutPositionIndex:
             general_after = positive_integer(general[general_after_index])
             if general_after is None:
                 continue
+            identity = normalized_name(
+                person[person_name_index] if len(person) > person_name_index else ""
+            )
             for position in positions:
                 if not isinstance(position, list) or len(position) <= max(specialty_code_index, specialty_after_index):
                     continue
@@ -559,16 +579,35 @@ class MasterCutPositionIndex:
                 if specialty_after is None:
                     continue
                 key = (general_after, code)
-                previous = self.by_general_specialty.get(key)
-                if previous is not None and previous != specialty_after:
-                    raise RuntimeError(
-                        "Posiciones de corte de Maestros ambiguas para "
-                        f"posicion general {general_after} y especialidad {code}"
+                general_candidates.setdefault(key, set()).add(specialty_after)
+                if identity:
+                    identity_candidates.setdefault((identity, code), set()).add(
+                        (general_after, specialty_after)
                     )
-                self.by_general_specialty[key] = specialty_after
-        self.enabled = bool(self.by_general_specialty)
 
-    def resolve(self, general_position: object, specialty_code: object, school_year: object) -> int | None:
+        for key, values in general_candidates.items():
+            if len(values) == 1:
+                self.by_general_specialty[key] = next(iter(values))
+            else:
+                self.ambiguous_general_specialties.add(key)
+        self.by_identity_specialty = {
+            key: tuple(sorted(values)) for key, values in identity_candidates.items()
+        }
+        if self.ambiguous_general_specialties:
+            print(
+                "Posiciones de corte de Maestros: "
+                f"{len(self.ambiguous_general_specialties)} claves generales ambiguas "
+                "se resolveran solo mediante la identidad del docente"
+            )
+        self.enabled = bool(self.by_general_specialty or self.by_identity_specialty)
+
+    def resolve(
+        self,
+        general_position: object,
+        specialty_code: object,
+        school_year: object,
+        candidate_name: object = None,
+    ) -> int | None:
         if not self.enabled or normalized_school_year(school_year) != self.academic_year:
             return None
         general = positive_integer(general_position)
@@ -576,6 +615,17 @@ class MasterCutPositionIndex:
             return None
         code = str(specialty_code or "")
         lookup_code = MASTER_SPECIALTY_POSITION_ALIASES.get(code, code)
+        identity = normalized_name(candidate_name)
+        if identity:
+            candidates = self.by_identity_specialty.get((identity, lookup_code), ())
+            exact = {value for rank, value in candidates if rank == general}
+            if len(exact) == 1:
+                return next(iter(exact))
+            values = {value for _rank, value in candidates}
+            if len(values) == 1:
+                return next(iter(values))
+        if not self.general_fallback_enabled:
+            return None
         return self.by_general_specialty.get((general, lookup_code))
 
 
@@ -1119,6 +1169,7 @@ def parse_pdf(
                 row.cut,
                 row.specialty_code,
                 parsed_school_year,
+                row.candidate_name,
             )
         output.append([
             row.center_code,
@@ -1158,13 +1209,22 @@ def pdf_already_processed(data: dict, parsed: ParsedPdf) -> bool:
     current = data["processed_pdfs"].get(parsed.url)
     if current and current.get("sha256") == parsed.sha256:
         return True
-    return any(
-        isinstance(item, dict)
-        and item.get("sha256") == parsed.sha256
-        and item.get("body") == parsed.body
+    return processed_pdf_by_sha(data, parsed.sha256, parsed.body) is not None
+
+
+def processed_pdf_by_sha(
+    data: dict,
+    sha256: str,
+    body: str | None = None,
+) -> tuple[str, dict] | None:
+    return next((
+        (url, item)
+        for url, item in data.get("processed_pdfs", {}).items()
+        if isinstance(item, dict)
+        and item.get("sha256") == sha256
         and item.get("mode") in {"inicio", "curso"}
-        for item in data.get("processed_pdfs", {}).values()
-    )
+        and (body is None or item.get("body") == body)
+    ), None)
 
 
 def url_already_seen(data: dict, url: str) -> bool:
@@ -1178,6 +1238,25 @@ def mark_processed(data: dict, parsed: ParsedPdf, mode: str) -> None:
         "body": parsed.body,
         "published_date": parsed.published_date,
         "rows": len(parsed.rows),
+        "processed_at": now_local().isoformat(timespec="seconds"),
+    }
+
+
+def mark_processed_alias(
+    data: dict,
+    url: str,
+    sha256: str,
+    mode: str,
+    original_url: str,
+    original: dict,
+) -> None:
+    data["processed_pdfs"][url] = {
+        "sha256": sha256,
+        "mode": mode,
+        "body": original.get("body"),
+        "published_date": original.get("published_date"),
+        "rows": original.get("rows", 0),
+        "duplicate_of": original_url,
         "processed_at": now_local().isoformat(timespec="seconds"),
     }
 
@@ -1276,7 +1355,9 @@ def enrich_master_cut_positions(data: dict, positions: MasterCutPositionIndex | 
         row = row_with_origin(raw, row_origin(raw, "inicio"))
         value = None
         if len(row) >= 7 and str(row[6]) == "maestros":
-            value = positions.resolve(row[2], row[1], school_year)
+            value = positive_integer(row[11])
+            if value is None:
+                value = positions.resolve(row[2], row[1], school_year)
             if value is None:
                 unresolved += 1
             else:
@@ -1808,6 +1889,23 @@ def run_mode(
         try:
             pdf_bytes = http_get(link["url"])
             sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+            duplicate = processed_pdf_by_sha(data, sha256)
+            if duplicate is not None:
+                original_url, original = duplicate
+                mark_processed_alias(
+                    data,
+                    link["url"],
+                    sha256,
+                    mode,
+                    original_url,
+                    original,
+                )
+                print(
+                    f"{mode}: PDF identico ya procesado; registrada URL alternativa "
+                    f"{link['url']}"
+                )
+                changed = True
+                continue
             parsed = parse_pdf(
                 link["url"],
                 pdf_bytes,
