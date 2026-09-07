@@ -45,11 +45,11 @@ La publicacion conserva las URL y el esquema que consumen CodePen y Android. Por
 
 ## Vigilante
 
-El workflow `Vigilar adjudicaciones` se ejecuta cada 15 minutos dentro de una ventana horaria amplia y aplica el mismo calendario de Madrid.
+El workflow `Vigilar adjudicaciones` se activa al terminar el workflow principal y tambien tiene una revision programada cada 15 minutos dentro de una ventana horaria amplia. Las revisiones programadas aplican el calendario de Madrid; los avisos de finalizacion se revisan aunque GitHub los entregue fuera del turno.
 
 - Cancela una ejecucion que lleve mas de 30 minutos bloqueada.
 - Detecta el primer fallo del workflow principal, incluidos errores de acceso a la Conselleria.
-- Realiza un solo intento de recuperacion con las fuentes que correspondan a esa fecha.
+- Realiza un solo intento de recuperacion con las fuentes que se intentaron en la ejecucion original, identificadas por sus pasos. No cambia de fuente si la recuperacion comienza en otra hora.
 - Crea una incidencia asignada al propietario para activar el aviso por correo e informa del resultado.
 - Mientras exista una incidencia abierta no encadena nuevos reintentos; una ejecucion posterior correcta cierra la alerta.
 - `generated_at` es informativo y no provoca falsas alarmas cuando no hay documentos nuevos.

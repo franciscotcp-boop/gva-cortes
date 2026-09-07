@@ -19,6 +19,7 @@ from offered_positions import (
     clean_extracted_center_name,
     has_english_requirement,
     remove_english_requirement,
+    source_center_name,
 )
 from update_offered_positions import (
     academic_year_for_check,
@@ -85,6 +86,17 @@ def published_payload(publication_date: str, items: list[list], sha: str) -> dic
 
 
 class OfferedPositionLinkTests(unittest.TestCase):
+    def test_recovers_full_name_when_the_slot_overlaps_the_center(self) -> None:
+        text = (
+            "1867 SUSTITUCIÓN DETERMINADASANT JOAN DE MORÓ - 12006895 - "
+            "EXTENSIÓN DEL CFPA TIRANT LO BLANC DE L'ALCORA872090 SI"
+        )
+        self.assertEqual(
+            source_center_name(text, "12006895", "872090"),
+            "EXTENSIÓN DEL CFPA TIRANT LO BLANC DE L'ALCORA",
+        )
+        self.assertIsNone(source_center_name(text, "12006895", "999999"))
+
     def test_removes_slot_id_overlapping_an_unknown_center_name(self) -> None:
         self.assertEqual(
             clean_extracted_center_name(

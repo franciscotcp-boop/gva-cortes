@@ -9,6 +9,7 @@ const {
   calendarModes,
   consecutiveFailureRuns,
   generatedAtHealth,
+  recoveryModesForRun,
   shouldMonitor,
   staleRunReason,
 } = runWatchdog._test;
@@ -100,6 +101,9 @@ function recoveryGithub(now, conclusion = "success") {
         getBlob: async () => { throw new Error("No deberia usarse getBlob en esta prueba"); },
       },
       actions: {
+        listJobsForWorkflowRun: async () => ({ data: { jobs: [{ steps: [
+          { name: "Actualizar puestos ofertados", conclusion: "success" },
+        ] }] } }),
         listWorkflowRuns: async () => {
           runsRead += 1;
           if (runsRead === 1) return { data: { workflow_runs: [staleRun] } };
@@ -247,7 +251,7 @@ test("simula cancelacion, relanzamiento y recuperacion correcta", async () => {
   assert.deepEqual(calls.dispatch[0].inputs, {
     force: "auto",
     school_year: "",
-    recovery_modes: calendarModes(now).join(","),
+    recovery_modes: "puestos",
   });
   assert.equal(calls.issues.length, 1);
   assert.equal(calls.issues[0].assignees[0], "franciscotcp-boop");
@@ -270,6 +274,34 @@ test("simula una recuperacion fallida y deja una alerta abierta", async () => {
   assert.equal(calls.issues[0].title, "[AdjudicApp] Recuperacion automatica fallida");
   assert.equal(calls.issueUpdates.length, 0);
   assert.equal(core.records.outputs.recovery_succeeded, "false");
+});
+
+test("recupera la fuente original aunque el fallo termine fuera del turno", async () => {
+  const now = new Date("2026-09-07T14:10:00Z");
+  assert.deepEqual(calendarModes(now), []);
+  const github = { rest: { actions: {
+    listJobsForWorkflowRun: async () => ({ data: { jobs: [{ steps: [
+      { name: "Actualizar puestos ofertados", conclusion: "success" },
+      { name: "Actualizar cortes de adjudicaciones", conclusion: "skipped" },
+      { name: "Comunicar fallos de las fuentes al vigilante", conclusion: "failure" },
+    ] }] } }),
+  } } };
+  assert.deepEqual(await recoveryModesForRun(github, "owner", "repo", {
+    id: 1631, created_at: "2026-09-07T13:27:34Z", event: "schedule",
+  }, now), ["puestos"]);
+});
+
+test("el evento de finalizacion activa la recuperacion fuera del calendario", async () => {
+  setWatchdogEnv();
+  const now = new Date("2026-09-07T14:10:00Z");
+  const { github, calls } = recoveryGithub(now);
+  const eventContext = context();
+  eventContext.eventName = "workflow_run";
+  const result = await runWatchdog({
+    github, context: eventContext, core: fakeCore(), now, sleepFn: async () => {},
+  });
+  assert.equal(result.recoverySucceeded, true);
+  assert.equal(calls.dispatch[0].inputs.recovery_modes, "puestos");
 });
 
 test("espera si tras un fallo ya hay una ejecucion reciente en marcha", async () => {

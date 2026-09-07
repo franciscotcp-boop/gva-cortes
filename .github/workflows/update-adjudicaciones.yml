@@ -165,9 +165,9 @@ jobs:
         continue-on-error: true
         env:
           SCHOOL_YEAR: ${{ inputs.school_year || '' }}
-          SOURCE_HTTP_TIMEOUT_SECONDS: "90"
+          SOURCE_HTTP_TIMEOUT_SECONDS: "180"
           SOURCE_HTTP_ATTEMPTS: "3"
-          SOURCE_HTTP_RETRY_DELAY_SECONDS: "20"
+          SOURCE_HTTP_RETRY_DELAY_SECONDS: "30"
         run: |
           args=()
           if [ -n "$SCHOOL_YEAR" ]; then

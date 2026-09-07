@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pdfplumber
+from pypdf import PdfReader
 
 
 SCHEMA_VERSION = 2
@@ -172,6 +173,16 @@ def clean_extracted_center_name(name: str, slot_id: str | None) -> str:
     return cleaned
 
 
+def source_center_name(page_text: str, center_code: str, slot_id: str | None) -> str | None:
+    if not slot_id:
+        return None
+    match = re.search(
+        rf"\b{re.escape(center_code)}\s*-\s*(.+?){re.escape(slot_id)}\b",
+        page_text,
+    )
+    return compact_text(match.group(1)) if match else None
+
+
 def context_lines(page: pdfplumber.page.Page) -> list[dict[str, Any]]:
     return page.extract_text_lines(
         layout=False,
@@ -199,9 +210,11 @@ def parse_pdf(
     items: list[list[Any]] = []
     publication_date = ""
     specialty_by_code = {str(item["code"]): dict(item) for item in specialties}
+    source_reader = None
 
     with pdfplumber.open(pdf_path) as pdf:
         for page_number, page in enumerate(pdf.pages, 1):
+            source_page_text = None
             page_text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
             if not publication_date:
                 date_match = re.search(
@@ -255,6 +268,15 @@ def parse_pdf(
                 extracted_center_name = clean_extracted_center_name(
                     center_match.group(3), slot_id
                 )
+                if center_code not in center_names:
+                    if source_reader is None:
+                        source_reader = PdfReader(pdf_path)
+                    if source_page_text is None:
+                        source_page_text = source_reader.pages[page_number - 1].extract_text() or ""
+                    # Content-stream order retains names obscured by the slot column.
+                    extracted_center_name = source_center_name(
+                        source_page_text, center_code, slot_id
+                    ) or extracted_center_name
                 center_name_pdf = center_names.get(center_code, extracted_center_name)
                 requirement = row_text(page, row, 327, 454)
                 itinerary = row_text(page, row, 454, 618)

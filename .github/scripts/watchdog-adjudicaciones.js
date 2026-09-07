@@ -204,6 +204,37 @@ async function listPrimaryRuns(github, owner, repo, workflowId) {
   return response.data.workflow_runs || [];
 }
 
+async function recoveryModesForRun(github, owner, repo, run, now) {
+  if (run) {
+    const response = await github.rest.actions.listJobsForWorkflowRun({
+      owner, repo, run_id: run.id, per_page: 100,
+    });
+    const attempted = new Set((response.data.jobs || []).flatMap(job =>
+      (job.steps || []).filter(step => step.conclusion !== "skipped").map(step => step.name)
+    ));
+    const modes = [];
+    if (attempted.has("Actualizar cortes de adjudicaciones")) {
+      const requested = String(run.display_title || run.name || "").match(/·\s*(inicio|curso|all)\)/);
+      const month = madridCalendar(new Date(run.created_at)).month;
+      const mode = requested ? requested[1] : ([7, 8].includes(month) ? "inicio" : "curso");
+      modes.push(...(mode === "all" ? ["inicio", "curso"] : [mode]));
+    }
+    const steps = {
+      "Actualizar posiciones anuales": "posiciones",
+      "Actualizar acreditaciones de ingles": "acreditaciones",
+      "Actualizar puestos ofertados": "puestos",
+      "Actualizar puestos de difícil cobertura": "dificil",
+      "Retirar difícil cobertura caducada": "limpieza_puestos",
+    };
+    for (const [step, mode] of Object.entries(steps)) {
+      if (attempted.has(step)) modes.push(mode);
+    }
+    if (modes.length) return modes;
+  }
+  // Early startup failures may not have reached any source step.
+  return calendarModes(run ? new Date(run.created_at) : now);
+}
+
 async function waitUntilCompleted(github, owner, repo, runId, waitMinutes) {
   const deadline = Date.now() + waitMinutes * 60000;
   let run = null;
@@ -463,8 +494,14 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   let recoveryStarted = Boolean(recoveryRun);
 
   if (!recoveryRun) {
+    const sourceRun = staleRuns[0] || failedRuns[0] || context.payload.workflow_run;
+    const recoveryModes = await recoveryModesForRun(github, owner, repo, sourceRun, now);
+    if (!recoveryModes.length) {
+      core.warning("No se ha podido identificar la fuente a recuperar; se conserva la incidencia sin anunciar una recuperacion vacia.");
+      return { action: "unknown_recovery_modes" };
+    }
+    core.info(`Fuentes de la ejecucion que se recuperan: ${recoveryModes.join(",")}`);
     const dispatchedAt = new Date();
-    const modes = calendarModes(now).join(",");
     await github.rest.actions.createWorkflowDispatch({
       owner,
       repo,
@@ -472,7 +509,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
       ref: context.payload.repository && context.payload.repository.default_branch
         ? context.payload.repository.default_branch
         : "main",
-      inputs: { force: "auto", school_year: "", recovery_modes: modes },
+      inputs: { force: "auto", school_year: "", recovery_modes: recoveryModes.join(",") },
     });
     recoveryRun = await findNewDispatch(github, owner, repo, workflowId, dispatchedAt);
     recoveryStarted = Boolean(recoveryRun);
@@ -545,6 +582,7 @@ module.exports._test = {
   generatedAtHealth,
   madridCalendar,
   positiveNumber,
+  recoveryModesForRun,
   runAgeMinutes,
   shouldMonitor,
   staleRunReason,
