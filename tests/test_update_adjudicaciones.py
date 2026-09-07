@@ -40,13 +40,19 @@ class CenterOverrideTests(unittest.TestCase):
         rows = updater.load_center_overrides()
         codes = [str(row[0]) for row in rows]
 
-        self.assertEqual(len(rows), 23)
+        self.assertEqual(len(rows), 24)
         self.assertEqual(len(codes), len(set(codes)))
         self.assertIn("03017382", codes)
         self.assertIn("03017436", codes)
         self.assertIn("03021750", codes)
         self.assertIn("03022092", codes)
         self.assertIn("12008624", codes)
+        self.assertIn("12006895", codes)
+
+    def test_sant_joan_de_moro_extension_keeps_official_coordinates(self) -> None:
+        row = next(row for row in updater.load_center_overrides() if row[0] == "12006895")
+        self.assertEqual(row[5], "PL. JUAN RENAU, 15")
+        self.assertEqual(row[14:16], [40.0607, -0.13755])
 
     def test_merge_replaces_existing_rows_and_adds_missing_rows(self) -> None:
         existing = [["A", "Original"] + [""] * 14]

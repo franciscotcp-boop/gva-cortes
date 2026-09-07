@@ -17,7 +17,32 @@
     "lat",
     "lon"
   ],
+  "sources": {
+    "12006895": {
+      "url": "https://sede.gva.es/es/detall-departament?id_dept=23200",
+      "map_url": "https://sede.gva.es/mapa?lng=-0.13755&lat=40.0607&dept=23200",
+      "checked_date": "2026-09-07"
+    }
+  },
   "centers": [
+    [
+      "12006895",
+      "Extensión del CFPA Tirant lo Blanc de l'Alcora",
+      "Centro Público de Formación de Personas Adultas",
+      "Centre Públic de Formació de Persones Adultes",
+      "Público",
+      "PL. JUAN RENAU, 15",
+      "12130",
+      "",
+      "",
+      "",
+      "",
+      "Sant Joan de Moró",
+      "",
+      "Castelló/Castellón",
+      40.0607,
+      -0.13755
+    ],
     [
       "46029215",
       "Extensión del CFPA Jaume I de Algemesí",
