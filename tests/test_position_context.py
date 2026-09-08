@@ -152,6 +152,25 @@ class PositionContextTests(unittest.TestCase):
                 {"GARCIA FERRER PAULA": [0, 1]}, {}, {0: 10, 1: 101},
             )
 
+    def test_master_duplicate_status_uses_the_real_awarded_rank(self) -> None:
+        for non_awarded_order in (71, 73):
+            with self.subTest(non_awarded_order=non_awarded_order):
+                self.positions["people"] = [[
+                    "Esther", "ROCA DURA, ESTHER", [position("128", 100, 90)],
+                    "maestros", [100, 90],
+                ]]
+                self.positions_path.write_text(json.dumps(self.positions), encoding="utf-8")
+                updater = PositionContextUpdater(self.positions_path, self.state_path)
+                updater.apply([parsed("2026-09-08", "maestros", [
+                    assignment("ROCA DURA, ESTHER", "128", "46004000", 72, "maestros"),
+                ], statuses=[
+                    status("ROCA DURA, ESTHER", None, non_awarded_order, "N"),
+                    status("ROCA DURA, ESTHER", None, 72, "A"),
+                ])], "curso")
+                self.assertEqual(updater.positions["people"][0][4][1], 72)
+                self.assertEqual(updater.positions["people"][0][2][0][8], "A")
+                self.assertEqual(updater.positions["continuous_snapshot"]["master_matched"], 1)
+
     def test_start_assignment_counts_only_same_specialty_and_people_ahead(self) -> None:
         updater = PositionContextUpdater(self.positions_path, self.state_path)
         updater.apply(

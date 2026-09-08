@@ -509,6 +509,8 @@ class PositionContextUpdater:
 
         report = {
             "master_statuses": 0,
+            "master_statuses_raw": 0,
+            "master_duplicate_statuses_ignored": 0,
             "master_matched": 0,
             "secondary_statuses": 0,
             "secondary_statuses_raw": 0,
@@ -549,10 +551,28 @@ class PositionContextUpdater:
                 by_compact[compact_name(official)].append(person_index)
 
             matched_rows: list[tuple[int, int, str]] = []
-            statuses = sorted(
-                getattr(master, "statuses", []),
-                key=lambda item: int(self._status_value(item, "position", 0) or 0),
-            )
+            raw_statuses = list(getattr(master, "statuses", []))
+            grouped: dict[str, list[object]] = defaultdict(list)
+            for record in raw_statuses:
+                name = candidate_name(self._status_value(record, "candidate_name", ""))
+                grouped[normalized_name(name)].append(record)
+            awarded = {
+                (normalized_name(candidate_name(getattr(row, "candidate_name", ""))), int(getattr(row, "cut", 0) or 0))
+                for row in getattr(master, "assignments", [])
+            }
+            statuses = []
+            for name, records in grouped.items():
+                limit = max(1, len(by_name.get(name) or []))
+                if len(records) > limit:
+                    records = sorted(records, key=lambda record: (
+                        0 if (name, int(self._status_value(record, "position", 0) or 0)) in awarded
+                        else 1 if self._status_value(record, "status", "N") != "A" else 2,
+                        -int(self._status_value(record, "position", 0) or 0),
+                    ))[:limit]
+                statuses.extend(records)
+            statuses.sort(key=lambda item: int(self._status_value(item, "position", 0) or 0))
+            report["master_statuses_raw"] = len(raw_statuses)
+            report["master_duplicate_statuses_ignored"] = len(raw_statuses) - len(statuses)
             report["master_statuses"] = len(statuses)
             for record, person_index in self._match_status_records(
                 statuses, by_name, by_compact, initial_orders,
