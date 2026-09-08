@@ -111,6 +111,47 @@ class PositionContextTests(unittest.TestCase):
     def load_positions(self) -> dict:
         return json.loads(self.positions_path.read_text(encoding="utf-8"))
 
+    def test_remaining_homonym_is_identified_by_neighbours_in_both_bodies(self) -> None:
+        for body, code in (("maestros", "128"), ("secundaria", "3A1")):
+            with self.subTest(body=body):
+                source = "maestros" if body == "maestros" else "otros"
+                self.positions["people"] = [
+                    ["Paula", "GARCIA FERRER, PAULA", [position(code, 10, 8)], source, [10, 8] if body == "maestros" else None],
+                    ["Anterior", "ANTERIOR, PERSONA", [position(code, 100, 80)], source, [100, 80] if body == "maestros" else None],
+                    ["Paula", "GARCIA FERRER, PAULA", [position(code, 101, 81)], source, [101, 81] if body == "maestros" else None],
+                    ["Posterior", "POSTERIOR, PERSONA", [position(code, 102, 82)], source, [102, 82] if body == "maestros" else None],
+                ]
+                self.positions_path.write_text(json.dumps(self.positions), encoding="utf-8")
+                if self.state_path.exists():
+                    self.state_path.unlink()
+                updater = PositionContextUpdater(self.positions_path, self.state_path)
+                updater.apply([parsed("2026-09-03", body, [
+                    assignment("GARCIA FERRER, PAULA", code, "03000001", 8, body),
+                ])], "curso")
+                current = assignment("GARCIA FERRER, PAULA", code, "46004000", 61, body)
+                record_code = None if body == "maestros" else code
+                updater.apply([parsed("2026-09-08", body, [current], "2", [
+                    status("ANTERIOR, PERSONA", record_code, 60, "N"),
+                    status("GARCIA FERRER, PAULA", record_code, 61, "A"),
+                    status("POSTERIOR, PERSONA", record_code, 62, "N"),
+                ])], "curso")
+                self.assertEqual(len(updater.positions["people"]), 4)
+                first, second = updater.positions["people"][0], updater.positions["people"][2]
+                self.assertEqual(first[2][0][9][4], "03000001")
+                self.assertEqual(first[2][0][9][1], "2026-09-03")
+                self.assertEqual(second[2][0][9][4], "46004000")
+                self.assertEqual(second[2][0][9][1], "2026-09-08")
+                if body == "maestros":
+                    self.assertEqual(updater.master_specialty_position(current), 2)
+
+    def test_ambiguous_single_homonym_without_anchors_is_rejected(self) -> None:
+        updater = PositionContextUpdater(self.positions_path, self.state_path)
+        with self.assertRaisesRegex(RuntimeError, "homonimas"):
+            updater._match_status_records(
+                [status("GARCIA FERRER, PAULA", None, 5, "A")],
+                {"GARCIA FERRER PAULA": [0, 1]}, {}, {0: 10, 1: 101},
+            )
+
     def test_start_assignment_counts_only_same_specialty_and_people_ahead(self) -> None:
         updater = PositionContextUpdater(self.positions_path, self.state_path)
         updater.apply(

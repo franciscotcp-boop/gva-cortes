@@ -378,6 +378,10 @@ class PositionContextUpdater:
                     for ref in self.profile_refs
                     if ref["body"] == body and normalized_name(ref["official_name"]) == identity
                 }
+                if len(matching_people) > 1:
+                    # A shifted rank does not make an existing homonym a new
+                    # person. Resolve their identity against the complete list.
+                    continue
                 person_index = next(iter(matching_people)) if len(matching_people) == 1 else None
                 if person_index is None:
                     source = "maestros" if body == "maestros" else "otros"
@@ -422,6 +426,75 @@ class PositionContextUpdater:
         used.add(value)
         return value
 
+    def _match_status_records(
+        self, statuses: list[object], by_name: dict, by_compact: dict,
+        initial_orders: dict[int, int | None], *, secondary: bool = False,
+    ) -> list[tuple[object, int]]:
+        queues: list[list[int]] = []
+        groups: list[str] = []
+        identities: list[tuple[str, str]] = []
+        remaining: defaultdict[tuple[str, str], int] = defaultdict(int)
+        anchors: list[int | None] = []
+        for record in statuses:
+            group = str(self._status_value(record, "specialty_code", "") or "") if secondary else ""
+            name = candidate_name(self._status_value(record, "candidate_name", ""))
+            identity = (group, normalized_name(name))
+            key = identity if secondary else identity[1]
+            compact_key = (group, compact_name(name)) if secondary else compact_name(name)
+            queue = list(by_name.get(key) or by_compact.get(compact_key) or [])
+            queues.append(queue)
+            groups.append(group)
+            identities.append(identity)
+            remaining[identity] += 1
+            anchors.append(initial_orders.get(queue[0]) if len(queue) == 1 else None)
+
+        # Neighbouring, uniquely named people anchor homonyms in the stable
+        # annual order, even when an earlier homonym has left the current list.
+        lower: list[int | None] = []
+        previous: dict[str, int] = {}
+        for group, anchor in zip(groups, anchors):
+            lower.append(previous.get(group))
+            if anchor is not None:
+                previous[group] = anchor
+        upper: list[int | None] = [None] * len(statuses)
+        following: dict[str, int] = {}
+        for index in range(len(statuses) - 1, -1, -1):
+            group = groups[index]
+            upper[index] = following.get(group)
+            if anchors[index] is not None:
+                following[group] = anchors[index]
+
+        used: set[int] = set()
+        matches: list[tuple[object, int]] = []
+        for index, record in enumerate(statuses):
+            available = [candidate for candidate in queues[index] if candidate not in used]
+            identity = identities[index]
+            chosen = available[0] if len(available) == 1 else None
+            if len(available) > 1:
+                bounded = [
+                    candidate for candidate in available
+                    if (rank := initial_orders.get(candidate)) is not None
+                    and (lower[index] is None or lower[index] < rank)
+                    and (upper[index] is None or rank < upper[index])
+                ]
+                if len(bounded) == 1:
+                    chosen = bounded[0]
+                elif len(available) == remaining[identity]:
+                    chosen = min(available, key=lambda candidate: (
+                        initial_orders.get(candidate) if initial_orders.get(candidate) is not None else 10**9,
+                        candidate,
+                    ))
+                else:
+                    raise RuntimeError(
+                        "No se puede distinguir de forma segura a las personas homonimas: "
+                        f"{self._status_value(record, 'candidate_name', '')} ({groups[index] or 'maestros'})"
+                    )
+            remaining[identity] -= 1
+            if chosen is not None:
+                used.add(chosen)
+                matches.append((record, chosen))
+        return matches
+
     def _sync_status_snapshots(self, parsed_items: list[object]) -> dict[str, int]:
         latest: dict[str, object] = {}
         for parsed in parsed_items:
@@ -451,6 +524,7 @@ class PositionContextUpdater:
         if master is not None:
             snapshot_dates.append(str(getattr(master, "published_date", "") or ""))
             people: list[tuple[int, int]] = []
+            initial_orders: dict[int, int | None] = {}
             for person_index, person in enumerate(self.positions.get("people", [])):
                 if not isinstance(person, list) or len(person) < 5 or not isinstance(person[2], list):
                     continue
@@ -465,6 +539,7 @@ class PositionContextUpdater:
                     general[0] if general else None
                 )
                 people.append((int(old_order) if old_order is not None else 10**9, person_index))
+                initial_orders[person_index] = int(general[0]) if general and general[0] is not None else None
             people.sort()
             by_name: dict[str, deque[int]] = defaultdict(deque)
             by_compact: dict[str, deque[int]] = defaultdict(deque)
@@ -474,19 +549,14 @@ class PositionContextUpdater:
                 by_compact[compact_name(official)].append(person_index)
 
             matched_rows: list[tuple[int, int, str]] = []
-            used: set[int] = set()
             statuses = sorted(
                 getattr(master, "statuses", []),
                 key=lambda item: int(self._status_value(item, "position", 0) or 0),
             )
             report["master_statuses"] = len(statuses)
-            for record in statuses:
-                name = candidate_name(self._status_value(record, "candidate_name", ""))
-                person_index = self._take_unused(by_name.get(normalized_name(name)), used)
-                if person_index is None:
-                    person_index = self._take_unused(by_compact.get(compact_name(name)), used)
-                if person_index is None:
-                    continue
+            for record, person_index in self._match_status_records(
+                statuses, by_name, by_compact, initial_orders,
+            ):
                 order = int(self._status_value(record, "position", 0) or 0)
                 status = str(self._status_value(record, "status", "N") or "N")
                 person = self.positions["people"][person_index]
@@ -594,7 +664,6 @@ class PositionContextUpdater:
                 ignored_duplicates += len(records) - limit
 
             matched_rows: list[tuple[str, int, int, str]] = []
-            used: set[int] = set()
             statuses = sorted(
                 statuses,
                 key=lambda item: (
@@ -605,14 +674,12 @@ class PositionContextUpdater:
             report["secondary_statuses_raw"] = len(raw_statuses)
             report["secondary_statuses"] = len(statuses)
             report["secondary_cross_specialty_duplicates_ignored"] = ignored_duplicates
-            for record in statuses:
+            for record, ref_index in self._match_status_records(
+                statuses, by_name_code, by_compact_code,
+                {index: ref["initial_order"] for index, ref in enumerate(refs)},
+                secondary=True,
+            ):
                 code = str(self._status_value(record, "specialty_code", "") or "")
-                name = candidate_name(self._status_value(record, "candidate_name", ""))
-                ref_index = self._take_unused(by_name_code.get((code, normalized_name(name))), used)
-                if ref_index is None:
-                    ref_index = self._take_unused(by_compact_code.get((code, compact_name(name))), used)
-                if ref_index is None:
-                    continue
                 ref = refs[ref_index]
                 order = int(self._status_value(record, "position", 0) or 0)
                 status = str(self._status_value(record, "status", "N") or "N")

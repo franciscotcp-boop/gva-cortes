@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -421,6 +421,32 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         ]
         row = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"))
         self.assertIsNone(row)
+
+    def test_cross_specialty_awards_cover_offers_without_creating_false_cuts(self) -> None:
+        text = "\n".join([
+            "08/09/2026 Altres Cossos / Otros Cuerpos",
+            "PROFESSORS D'ENSENYAMENT SECUNDARI",
+            "202 GREC",
+            *[f"{number} PRUEBA, DOCENTE {number}\nDesactivat" for number in range(1, 1001)],
+            "1001 BENAVENT PLA, CAROLINA Voluntaria",
+            "215753 MISLATA(46022889)IES MUSIC MARTIN I SOLER",
+            "275 / CULTURA CLASSICA",
+            "Jornada completa VACANT Adjudicat",
+            "1002 BENAVENT PLA, CAROLINA Voluntaria",
+            "215753 MISLATA(46022889)IES MUSIC MARTIN I SOLER",
+            "275 / CULTURA CLASSICA",
+            "Jornada completa VACANT No adjudicat",
+        ])
+        document = MagicMock()
+        document.__enter__.return_value.pages = [MagicMock()]
+        document.__enter__.return_value.pages[0].extract_text.return_value = text
+        with patch.object(updater.pdfplumber, "open", return_value=document):
+            result = updater.parse_pdf("https://example.test/260908_lis_sec.pdf", b"test", {})
+        self.assertEqual(result.assignments, [])
+        self.assertEqual(result.rows, [])
+        self.assertEqual(len(result.covered_assignments), 1)
+        self.assertEqual(result.covered_assignments[0].slot_id, "215753")
+        self.assertEqual(result.covered_assignments[0].specialty_code, "275")
 
     def test_canos_is_geography_but_not_mathematics(self) -> None:
         block = [

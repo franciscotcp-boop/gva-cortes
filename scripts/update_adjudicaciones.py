@@ -250,6 +250,7 @@ class ParsedPdf:
     rows: list[list]
     assignments: list[Adjudication] = field(default_factory=list)
     statuses: list[StatusRecord] = field(default_factory=list)
+    covered_assignments: list[Adjudication] = field(default_factory=list)
 
 
 def now_local() -> datetime:
@@ -1049,6 +1050,8 @@ def parse_block(
     block: list[str],
     body: str,
     page_specialty: tuple[str, str] | None = None,
+    *,
+    require_matching_specialty: bool = True,
 ) -> Adjudication | None:
     if not block or not any("Adjudicat" in line for line in block):
         return None
@@ -1066,11 +1069,14 @@ def parse_block(
         if page_specialty is None or specialty_match is None:
             return None
         assigned_specialty_code = specialty_match.group(1)
-        if assigned_specialty_code != page_specialty[0]:
+        if require_matching_specialty and assigned_specialty_code != page_specialty[0]:
             return None
         # The row only belongs to this cut when the candidate-pool header and
         # the specialty of the awarded position identify the same specialty.
-        specialty_code, specialty_name = page_specialty
+        specialty_code, specialty_name = (
+            page_specialty if require_matching_specialty else
+            (assigned_specialty_code, clean(specialty_match.group(2)))
+        )
     elif specialty_match:
         specialty_code = specialty_match.group(1)
         specialty_name = clean(specialty_match.group(2))
@@ -1104,6 +1110,7 @@ def parse_pdf(
     sha = hashlib.sha256(pdf_bytes).hexdigest()
     rows: list[Adjudication] = []
     statuses: list[StatusRecord] = []
+    covered_assignments: dict[tuple[str, str, str], Adjudication] = {}
     body: str | None = None
     published_date: str | None = None
 
@@ -1127,6 +1134,12 @@ def parse_pdf(
                 status = parse_status_block(block, body, page_specialty)
                 if status:
                     statuses.append(status)
+                if status and status.status == "A":
+                    covered = parse_block(
+                        block, body, page_specialty, require_matching_specialty=False,
+                    )
+                    if covered and covered.slot_id:
+                        covered_assignments[(covered.slot_id, covered.center_code, covered.specialty_code)] = covered
                 adjudication = parse_block(block, body, page_specialty)
                 if adjudication:
                     rows.append(adjudication)
@@ -1202,6 +1215,7 @@ def parse_pdf(
         rows=output,
         assignments=assignments,
         statuses=statuses,
+        covered_assignments=list(covered_assignments.values()),
     )
 
 
@@ -1974,7 +1988,12 @@ def run_mode(
         academic_year = school_year_for_date(adjudication_date, now_local())
         reconciliation = reconcile_after_adjudication(
             output=OFFERED_POSITIONS_PATH,
-            assignments=assignments,
+            # Filling a post is independent of the stricter rule for its cut.
+            assignments=[
+                assignment
+                for item in parsed_items
+                for assignment in (getattr(item, "covered_assignments", None) or item.assignments)
+            ],
             academic_year=academic_year,
             adjudication_date=adjudication_date,
         )
