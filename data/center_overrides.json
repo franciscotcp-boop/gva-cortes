@@ -18,6 +18,13 @@
     "lon"
   ],
   "sources": {
+    "03019020": {
+      "url": "https://school-education.ec.europa.eu/en/connect/schools-organisations/unidad-pedagogica-hospitalaria-uph-hospital-general-y-universitario-de-alicante",
+      "location_url": "https://sede.gva.es/es/detall-departament?id_dept=24256",
+      "map_url": "https://sede.gva.es/mapa?lng=-0.4862&lat=38.3632&dept=24256",
+      "checked_date": "2026-09-09",
+      "location_note": "Coordenadas del recinto hospitalario en el que se ubica la unidad pedagogica."
+    },
     "12006895": {
       "url": "https://sede.gva.es/es/detall-departament?id_dept=23200",
       "map_url": "https://sede.gva.es/mapa?lng=-0.13755&lat=40.0607&dept=23200",
@@ -25,6 +32,24 @@
     }
   },
   "centers": [
+    [
+      "03019020",
+      "UPH Hospital General de Alicante",
+      "Unidad Pedagógica Hospitalaria",
+      "Unitat Pedagògica Hospitalària",
+      "Público",
+      "CL. PINTOR BAEZA, 12",
+      "03010",
+      "630707131",
+      "03019020@edu.gva.es",
+      "",
+      "",
+      "Alacant/Alicante",
+      "",
+      "Alacant/Alicante",
+      38.3632,
+      -0.4862
+    ],
     [
       "12006895",
       "Extensión del CFPA Tirant lo Blanc de l'Alcora",

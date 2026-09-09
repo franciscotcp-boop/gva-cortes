@@ -40,7 +40,7 @@ class CenterOverrideTests(unittest.TestCase):
         rows = updater.load_center_overrides()
         codes = [str(row[0]) for row in rows]
 
-        self.assertEqual(len(rows), 24)
+        self.assertEqual(len(rows), 25)
         self.assertEqual(len(codes), len(set(codes)))
         self.assertIn("03017382", codes)
         self.assertIn("03017436", codes)
@@ -48,6 +48,13 @@ class CenterOverrideTests(unittest.TestCase):
         self.assertIn("03022092", codes)
         self.assertIn("12008624", codes)
         self.assertIn("12006895", codes)
+        self.assertIn("03019020", codes)
+
+    def test_alicante_hospital_unit_keeps_verified_location(self) -> None:
+        row = next(row for row in updater.load_center_overrides() if row[0] == "03019020")
+        self.assertEqual(row[5], "CL. PINTOR BAEZA, 12")
+        self.assertEqual(row[8], "03019020@edu.gva.es")
+        self.assertEqual(row[14:16], [38.3632, -0.4862])
 
     def test_sant_joan_de_moro_extension_keeps_official_coordinates(self) -> None:
         row = next(row for row in updater.load_center_overrides() if row[0] == "12006895")
