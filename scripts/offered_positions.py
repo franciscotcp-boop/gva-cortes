@@ -484,14 +484,16 @@ def parse_difficult_pdf(
                 and 295 <= float(word["x0"]) <= 360
                 and 100 < float(word["top"]) < float(page.height) - 20
             ]
-            row_tops = sorted({round(float(word["top"]), 2) for word in slot_words})
+            row_tops = sorted({float(word["top"]) for word in slot_words})
             boundaries.extend(row_tops)
 
             for word in slot_words:
                 row_top = float(word["top"])
                 slot_id = str(word["text"])
                 next_boundaries = [value for value in boundaries if value > row_top + 1]
-                row_bottom = min(next_boundaries) - 2 if next_boundaries else row_top + 38
+                # Small-font notes start above their slot number. End exactly
+                # where the following row's crop starts, without overlapping.
+                row_bottom = min(next_boundaries) - 3 if next_boundaries else row_top + 38
                 row_bottom = min(row_bottom, row_top + 42)
                 crop_top = row_top - 3
 

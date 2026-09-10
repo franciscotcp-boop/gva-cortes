@@ -22,6 +22,7 @@ from offered_positions import (
     source_center_name,
     split_difficult_requirement,
     difficult_detail_columns,
+    parse_difficult_pdf,
 )
 from update_offered_positions import (
     academic_year_for_check,
@@ -88,6 +89,45 @@ def published_payload(publication_date: str, items: list[list], sha: str) -> dic
 
 
 class OfferedPositionLinkTests(unittest.TestCase):
+    def test_multiline_date_belongs_only_to_its_own_offer(self) -> None:
+        chars = []
+        for text, top in (("Centre singular. Fins al", 330.388), ("30/06/2027", 338.308)):
+            chars.extend(
+                {"text": char, "x0": 670 + index * 4, "x1": 674 + index * 4,
+                 "top": top, "size": 7}
+                for index, char in enumerate(text)
+            )
+        words = [
+            {"text": "845812", "x0": 313, "top": 314.581868},
+            {"text": "890528", "x0": 313, "top": 332.581868},
+        ]
+        page = SimpleNamespace(
+            chars=chars, height=595,
+            extract_text=lambda **kwargs: "10/09/2026",
+            extract_words=lambda **kwargs: words,
+        )
+        lines = [
+            {"text": "CUERPO/COS: MESTRES", "top": 150},
+            {"text": "ESPECIALIDAD/ESPECIALITAT: 126 AUDICION Y LENGUAJE", "top": 180},
+            {"text": "PROVINCIA/PROVINCIA: ALICANTE", "top": 200},
+            {"text": "PAG 1", "top": 550},
+        ]
+
+        def column(_page, left, right, top, bottom):
+            first = top < 320
+            if left == 20:
+                return "ELX - 03004491 - CEIP LA BAIA" if first else "ORIHUELA - 03011707 - CEE ANTONIO SEQUEROS"
+            return {360: "7,67" if first else "11,5", 402: "NO", 445: "Sust. Det."}.get(left, "")
+
+        path = SimpleNamespace(name="test.pdf", read_bytes=lambda: b"test-source")
+        with patch("offered_positions.pdfplumber.open") as opened, \
+             patch("offered_positions.context_lines", return_value=lines), \
+             patch("offered_positions.column_text", side_effect=column):
+            opened.return_value.__enter__.return_value.pages = [page]
+            parsed = parse_difficult_pdf(path, [], {})
+        self.assertEqual(parsed["items"][0][11], "")
+        self.assertEqual(parsed["items"][1][11], "Centre singular. Fins al 30/06/2027")
+
     def test_centered_composition_can_extend_into_adjacent_columns(self) -> None:
         text = "O.P.M.VEHIC. + ÀMBIT CIENT."
         chars = [
