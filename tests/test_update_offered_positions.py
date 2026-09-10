@@ -20,6 +20,8 @@ from offered_positions import (
     has_english_requirement,
     remove_english_requirement,
     source_center_name,
+    split_difficult_requirement,
+    difficult_detail_columns,
 )
 from update_offered_positions import (
     academic_year_for_check,
@@ -86,6 +88,38 @@ def published_payload(publication_date: str, items: list[list], sha: str) -> dic
 
 
 class OfferedPositionLinkTests(unittest.TestCase):
+    def test_centered_composition_can_extend_into_adjacent_columns(self) -> None:
+        text = "O.P.M.VEHIC. + ÀMBIT CIENT."
+        chars = [
+            {"text": char, "x0": 541 + index * 4.5, "x1": 545.5 + index * 4.5,
+             "top": 20, "size": 8}
+            for index, char in enumerate(text)
+        ]
+        self.assertEqual(
+            difficult_detail_columns(SimpleNamespace(chars=chars), 18, 35),
+            ("", text, ""),
+        )
+
+    def test_difficult_details_keep_language_composition_and_notes_separate(self) -> None:
+        chars = []
+        for text, start, size in (("ING.", 520, 10), ("TEC. + DIBUIX", 580, 8), ("Centre singular", 690, 8)):
+            chars.extend(
+                {"text": char, "x0": start + index * 4, "x1": start + (index + 1) * 4,
+                 "top": 20, "size": size}
+                for index, char in enumerate(text)
+            )
+        self.assertEqual(
+            difficult_detail_columns(SimpleNamespace(chars=chars), 18, 35),
+            ("ING.", "TEC. + DIBUIX", "Centre singular"),
+        )
+
+    def test_difficult_requirements_keep_non_english_languages(self) -> None:
+        self.assertEqual(split_difficult_requirement("FRA."), (False, "FRA."))
+        self.assertEqual(split_difficult_requirement("ING."), (True, ""))
+        self.assertEqual(split_difficult_requirement("ING-B2"), (True, ""))
+        self.assertEqual(split_difficult_requirement("ING. FRA."), (True, "FRA."))
+        self.assertEqual(split_difficult_requirement(""), (False, ""))
+
     def test_recovers_full_name_when_the_slot_overlaps_the_center(self) -> None:
         text = (
             "1867 SUSTITUCIÓN DETERMINADASANT JOAN DE MORÓ - 12006895 - "

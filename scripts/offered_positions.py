@@ -402,6 +402,41 @@ def parse_yes_no(raw: str, *, page_number: int, slot_id: str) -> bool:
     )
 
 
+def difficult_detail_columns(page: Any, top: float, bottom: float) -> tuple[str, str, str]:
+    # Long centered cells can cross the nominal column edges. Keep each text
+    # run intact and assign it by its midpoint instead of clipping characters.
+    groups: list[list[dict[str, Any]]] = []
+    for char in page.chars:
+        if not (510 <= char["x0"] < 838 and top <= char["top"] < bottom):
+            continue
+        previous = groups[-1][-1] if groups else None
+        if previous is None or (
+            abs(char["top"] - previous["top"]) > 2
+            or abs(char["size"] - previous["size"]) > 0.5
+            or char["x0"] - previous["x1"] > 3
+            or char["x0"] < previous["x0"] - 2
+        ):
+            groups.append([])
+        groups[-1].append(char)
+    columns: list[list[str]] = [[], [], []]
+    for group in groups:
+        text = compact_text("".join(char["text"] for char in group))
+        if not text:
+            continue
+        middle = (min(char["x0"] for char in group) + max(char["x1"] for char in group)) / 2
+        index = 0 if middle < 570 else (1 if middle < 650 else 2)
+        columns[index].append(text)
+    return tuple(deduplicate_repeated_text(" ".join(parts)) for parts in columns)
+
+
+def split_difficult_requirement(raw: str) -> tuple[bool, str]:
+    text = compact_text(raw)
+    english = re.compile(r"\bING(?:L[ÉE]S)?(?:\s*-?\s*B2)?\b\.?", re.IGNORECASE)
+    has_english = bool(english.search(text))
+    remaining = compact_text(english.sub(" ", text)).strip(" /,;")
+    return has_english, remaining
+
+
 def parse_difficult_pdf(
     pdf_path: Path,
     specialties: list[dict[str, Any]],
@@ -502,11 +537,14 @@ def parse_difficult_pdf(
                 hours_raw = column_text(page, 360, 402, crop_top, row_bottom)
                 itinerary_raw = column_text(page, 402, 445, crop_top, row_bottom)
                 placement_raw = column_text(page, 445, 512, crop_top, row_bottom)
-                requirement_raw = column_text(page, 512, 570, crop_top, row_bottom)
-                composition = column_text(page, 570, 650, crop_top, row_bottom)
-                observations = deduplicate_repeated_text(
-                    column_text(page, 650, 838, crop_top, row_bottom)
+                requirement_raw, composition, observations = difficult_detail_columns(
+                    page, crop_top, row_bottom,
                 )
+                english_requirement, other_requirement = split_difficult_requirement(requirement_raw)
+                if other_requirement:
+                    observations = "; ".join(filter(None, (
+                        observations, f"Requisito: {other_requirement}",
+                    )))
 
                 items.append(
                     [
@@ -519,7 +557,7 @@ def parse_difficult_pdf(
                         center_names.get(center_code, extracted_center_name),
                         slot_id,
                         parse_hours(hours_raw),
-                        bool(re.search(r"\bING(?:L[ÉE]S)?(?:\s*-?\s*B2)?\b", requirement_raw, re.IGNORECASE)),
+                        english_requirement,
                         parse_yes_no(
                             itinerary_raw,
                             page_number=page_number,
