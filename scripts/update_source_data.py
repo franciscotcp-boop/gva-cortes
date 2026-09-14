@@ -1838,6 +1838,8 @@ def run_positions(
         master_award_pdf,
         secondary_award_pdf,
     )
+    from difficult_assignments import preserve_ledger
+    preserve_ledger(candidate, positions_path.parent)
     save_json_atomic(positions_path, candidate)
     state.setdefault("position_lists", {})[str(year)] = {
         "academic_year": f"{year}-{year + 1}",
