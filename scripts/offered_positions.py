@@ -140,9 +140,12 @@ def parse_specialty(raw: str) -> tuple[str, str]:
     return match.group(1).upper(), match.group(2).strip()
 
 
-def row_text(page: pdfplumber.page.Page, row: dict[str, Any], x0: float, x1: float) -> str:
+def row_text(
+    page: pdfplumber.page.Page, row: dict[str, Any], x0: float, x1: float,
+    *, bottom: float | None = None,
+) -> str:
     top = max(0, float(row["top"]) - 2.2)
-    bottom = min(float(page.height), float(row["bottom"]) + 2.2)
+    bottom = min(float(page.height), bottom if bottom is not None else float(row["bottom"]) + 2.2)
     return compact_text(
         page.crop((x0, top, x1, bottom)).extract_text(x_tolerance=1, y_tolerance=2)
     )
@@ -181,6 +184,29 @@ def source_center_name(page_text: str, center_code: str, slot_id: str | None) ->
         page_text,
     )
     return compact_text(match.group(1)) if match else None
+
+
+def source_row_hours(page_text: str, order: str, slot_id: str, observations: str) -> float | None:
+    """Recover hours drawn over a long center name using PDF drawing order."""
+    match = re.search(rf"^{re.escape(order)}\s+(?:VACANTE|SUSTITUCI.N)", page_text, re.MULTILINE)
+    if not match:
+        raise ValueError(f"No se encuentra la fila {order} para verificar sus horas")
+    record = re.split(
+        r"\n\d+\s+(?:VACANTE|SUSTITUCI.N)|\n(?:PROVINCIA/|CUERPO/|ESPECIALIDAD/|P.g \d+)",
+        page_text[match.start():], maxsplit=1,
+    )[0]
+    tail = record.split(slot_id, 1)[-1]
+    tail = compact_text(re.sub(r"^\s*(?:NO|S[ÍI])", "", tail))
+    if observations:
+        if not tail.startswith(observations):
+            raise ValueError(f"No se pueden separar observaciones y horas en el puesto {slot_id}")
+        tail = tail[len(observations):].strip()
+    tail = remove_english_requirement(tail).strip(" .")
+    if not tail:
+        return None
+    if not re.fullmatch(r"\d{1,2}(?:[,.]\d+)?", tail):
+        raise ValueError(f"Horas no reconocidas en el puesto {slot_id}: {tail!r}")
+    return float(tail.replace(",", "."))
 
 
 def context_lines(page: pdfplumber.page.Page) -> list[dict[str, Any]]:
@@ -279,7 +305,18 @@ def parse_pdf(
                     ) or extracted_center_name
                 center_name_pdf = center_names.get(center_code, extracted_center_name)
                 requirement = row_text(page, row, 327, 454)
-                itinerary = row_text(page, row, 454, 618)
+                # Notes may span several lines; stop before the next row or heading.
+                boundaries = [float(other["top"]) for other in row_numbers]
+                boundaries.extend(top for top, _ in bodies + page_specialties + provinces)
+                boundaries.extend(
+                    float(word["top"]) for word in words
+                    if re.fullmatch(r"\d{8}:", word["text"])
+                )
+                notes_bottom = min(
+                    (top - 2.2 for top in boundaries if top > float(row["top"])),
+                    default=float(page.height) - 25,
+                )
+                itinerary = row_text(page, row, 454, 618, bottom=notes_bottom)
                 placement_raw = row_text(page, row, 618, 840)
 
                 body_raw = nearest_context(bodies, float(row["top"]), "cuerpo", page_number)
@@ -322,6 +359,12 @@ def parse_pdf(
                     )
                 itinerant = itinerant_match.group(1).upper() in {"SI", "SÍ"}
                 observations = itinerant_match.group(2).strip()
+                if hours is None and re.search(r"[A-Za-z]", requirement_without_english):
+                    if source_reader is None:
+                        source_reader = PdfReader(pdf_path)
+                    if source_page_text is None:
+                        source_page_text = source_reader.pages[page_number - 1].extract_text() or ""
+                    hours = source_row_hours(source_page_text, row["text"], slot_id, observations)
 
                 items.append(
                     [

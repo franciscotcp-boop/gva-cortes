@@ -23,6 +23,8 @@ from offered_positions import (
     split_difficult_requirement,
     difficult_detail_columns,
     parse_difficult_pdf,
+    parse_pdf,
+    source_row_hours,
 )
 from update_offered_positions import (
     academic_year_for_check,
@@ -89,6 +91,56 @@ def published_payload(publication_date: str, items: list[list], sha: str) -> dic
 
 
 class OfferedPositionLinkTests(unittest.TestCase):
+    def test_source_hours_survive_center_name_overlap(self) -> None:
+        text = (
+            "651 VACANTE\n46000001: CENTRE A 9,00 hores\n"
+            "REQUENA - 46019350 - CONSERVATORIO DE MUSICA717442 SI14\n"
+            "PROVINCIA/PROVINCIA: ALICANTE\n"
+            "680 SUSTITUCION INDETERMINADAALACANT - 03018313 - ESCOLA915684 NO6\n"
+            "681 SUSTITUCION DETERMINADAALACANT - 03018313 - ESCOLA915685 NO\n"
+            "Pag 98 de 98"
+        )
+        self.assertEqual(source_row_hours(text, "651", "717442", ""), 14)
+        self.assertEqual(source_row_hours(text, "680", "915684", ""), 6)
+        self.assertIsNone(source_row_hours(text, "681", "915685", ""))
+
+    def test_ordinary_notes_keep_three_lines_without_borrowing_next_row(self) -> None:
+        words = [
+            {"text": "1", "x0": 30, "top": 200, "bottom": 206},
+            {"text": "2", "x0": 30, "top": 240, "bottom": 246},
+            {"text": "03000001:", "x0": 199, "top": 225, "bottom": 232},
+        ]
+        notes = [(198.3, "NO ATENDERA CEIP"), (206.5, "SEGUN NECESIDADES POR"),
+                 (214.7, "DESGLOSE"), (225, "11,50 hores PRIMARIA"),
+                 (238.3, "NO Fins al 30/06/2027")]
+
+        def crop(box):
+            left, top, right, bottom = box
+            if left == 454:
+                text = " ".join(text for y, text in notes if top <= y < bottom)
+            else:
+                text = {43: "ELX - 03000001 - CEIP PRUEBA", 327: "11,5 ING-B2",
+                        618: "SUSTITUCION INDETERMINADA"}[left]
+            return SimpleNamespace(extract_text=lambda **kwargs: text)
+
+        page = SimpleNamespace(height=595, crop=crop,
+            extract_text=lambda **kwargs: "ADJUDICACION DE PERSONAL DOCENTE INTERINO DIA 15/09/2026",
+            extract_words=lambda **kwargs: words)
+        lines = [
+            {"text": "CUERPO/COS: MAESTROS", "top": 120},
+            {"text": "ESPECIALIDAD/ESPECIALITAT:128 - PRIMARIA", "top": 140},
+            {"text": "PROVINCIA/PROVINCIA: ALICANTE", "top": 160},
+        ]
+        path = SimpleNamespace(name="test.pdf", read_bytes=lambda: b"test-source")
+        with patch("offered_positions.pdfplumber.open") as opened, \
+             patch("offered_positions.context_lines", return_value=lines), \
+             patch("offered_positions.extract_slot_id", side_effect=["123456", "123457"]):
+            opened.return_value.__enter__.return_value.pages = [page]
+            parsed = parse_pdf(path, [], {"03000001": "CEIP PRUEBA"})
+        self.assertEqual(parsed["items"][0][11], "ATENDERA CEIP SEGUN NECESIDADES POR DESGLOSE")
+        self.assertEqual(parsed["items"][1][11], "Fins al 30/06/2027")
+        self.assertEqual(parsed["items"][0][8:11], [11.5, True, False])
+
     def test_multiline_date_belongs_only_to_its_own_offer(self) -> None:
         chars = []
         for text, top in (("Centre singular. Fins al", 330.388), ("30/06/2027", 338.308)):
