@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter, OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -231,6 +231,7 @@ class Adjudication:
     itinerant: bool
     slot_id: str = ""
     observations: str = ""
+    post_specialty_code: str = ""
 
 
 @dataclass
@@ -1100,6 +1101,49 @@ def parse_block(
     )
 
 
+PROGRAM_NOTES = {
+    "275": "Cultura Cl\u00e1sica / Cultura Cl\u00e0ssica",
+    "276": "\u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic",
+    "277": "\u00c1mbito Socioling\u00fc\u00edstico / \u00c0mbit Socioling\u00fc\u00edstic",
+    "293": "FPA Ciencias Sociales / FPA Ci\u00e8ncies Socials",
+    "297": "FPA Comunicaci\u00f3n (Valenciano) / FPA Comunicaci\u00f3 (Valenci\u00e0)",
+}
+
+
+def resolve_program_assignments(
+    covered: list[Adjudication],
+    statuses: list[StatusRecord],
+    headers: dict[str, str],
+) -> list[Adjudication]:
+    """Keep the originating pool for area/program posts, never ordinary mismatches."""
+    awarded: dict[str, set[tuple[str, int]]] = {}
+    for status in statuses:
+        if status.status == "A" and status.specialty_code:
+            awarded.setdefault(normalized_name(status.candidate_name), set()).add(
+                (status.specialty_code, status.position)
+            )
+    result = []
+    for post in covered:
+        if post.body != "secundaria" or post.specialty_code not in PROGRAM_NOTES:
+            continue
+        candidates = awarded.get(normalized_name(post.candidate_name), set())
+        # A future dedicated pool takes precedence over the program exception.
+        if any(code == post.specialty_code for code, _ in candidates):
+            continue
+        if len(candidates) != 1:
+            raise ValueError(f"Ambiguous originating pool for program post {post.slot_id}: {sorted(candidates)}")
+        code, position = next(iter(candidates))
+        if code not in headers:
+            raise ValueError(f"Missing originating header {code} for program post {post.slot_id}")
+        note = f"{post.specialty_code} {PROGRAM_NOTES[post.specialty_code]}"
+        result.append(replace(
+            post, cut=position, specialty_code=code, specialty_name=headers[code],
+            post_specialty_code=post.specialty_code,
+            observations="; ".join(filter(None, (post.observations, note))),
+        ))
+    return result
+
+
 def parse_pdf(
     url: str,
     pdf_bytes: bytes,
@@ -1111,6 +1155,7 @@ def parse_pdf(
     rows: list[Adjudication] = []
     statuses: list[StatusRecord] = []
     covered_assignments: dict[tuple[str, str, str], Adjudication] = {}
+    headers: dict[str, str] = {}
     body: str | None = None
     published_date: str | None = None
 
@@ -1127,6 +1172,8 @@ def parse_pdf(
             page_specialty = secondary_page_specialty(text) if body == "secundaria" else None
             if body == "secundaria" and page_specialty is None:
                 raise ValueError(f"No se pudo leer la especialidad del encabezado en la pagina {page_number}")
+            if page_specialty:
+                headers[page_specialty[0]] = page_specialty[1]
 
             current: list[str] = []
 
@@ -1164,6 +1211,7 @@ def parse_pdf(
     if len(statuses) < 1000:
         raise ValueError(f"El PDF de {body} solo contiene {len(statuses)} estados validos")
 
+    rows.extend(resolve_program_assignments(list(covered_assignments.values()), statuses, headers))
     valid_rows = [row for row in rows if owning_body_for_specialty(row.specialty_code) == body]
     best: OrderedDict[tuple[str, str], Adjudication] = OrderedDict()
     for row in valid_rows:

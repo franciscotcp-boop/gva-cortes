@@ -429,7 +429,7 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         row = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"))
         self.assertIsNone(row)
 
-    def test_cross_specialty_awards_cover_offers_without_creating_false_cuts(self) -> None:
+    def test_classical_culture_uses_originating_pool_and_preserves_offered_code(self) -> None:
         text = "\n".join([
             "08/09/2026 Altres Cossos / Otros Cuerpos",
             "PROFESSORS D'ENSENYAMENT SECUNDARI",
@@ -449,11 +449,45 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         document.__enter__.return_value.pages[0].extract_text.return_value = text
         with patch.object(updater.pdfplumber, "open", return_value=document):
             result = updater.parse_pdf("https://example.test/260908_lis_sec.pdf", b"test", {})
-        self.assertEqual(result.assignments, [])
-        self.assertEqual(result.rows, [])
+        self.assertEqual(len(result.assignments), 1)
+        self.assertEqual(result.assignments[0].specialty_code, "202")
+        self.assertEqual(result.assignments[0].post_specialty_code, "275")
+        self.assertEqual(result.rows[0][1:3], ["202", 1001])
+        self.assertIn("Cultura Cl\u00e1sica", result.assignments[0].observations)
         self.assertEqual(len(result.covered_assignments), 1)
         self.assertEqual(result.covered_assignments[0].slot_id, "215753")
         self.assertEqual(result.covered_assignments[0].specialty_code, "275")
+
+    def test_program_uses_unique_header_and_keeps_bilingual_note(self) -> None:
+        block = [
+            "257 MARTI NAVARRO, ANA MARIA Voluntaria",
+            "871091 ALACANT(03001908)IES FIGUERAS PACHECO",
+            "276 / AMBIT CIENTIFIC",
+            "6 horas SUBSTITUCIO INDETERMINADA Adjudicat",
+        ]
+        covered = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"), require_matching_specialty=False)
+        status = updater.parse_status_block(block, "secundaria", ("219", "TECNOLOGIA"))
+        results = updater.resolve_program_assignments([covered], [status], {"219": "TECNOLOGIA"})
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].specialty_code, "219")
+        self.assertEqual(results[0].cut, 257)
+        self.assertEqual(results[0].post_specialty_code, "276")
+        self.assertEqual(results[0].observations, "276 \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic")
+        self.assertEqual(covered.specialty_code, "276")
+        other = updater.StatusRecord(286, status.candidate_name, "207", "A")
+        with self.assertRaisesRegex(ValueError, "Ambiguous originating pool"):
+            updater.resolve_program_assignments([covered], [status, other], {"219": "TECNOLOGIA", "207": "FISICA I QUIMICA"})
+
+    def test_unknown_cross_specialty_code_is_not_a_program_exception(self) -> None:
+        block = [
+            "1940 CANOS CABEDO, MARIA DE LA PURIFICACION Voluntaria",
+            "875307 BORRIANA(12000704)IES JAUME I",
+            "205 / GEOGRAFIA I HISTORIA",
+            "Jornada completa VACANT Adjudicat",
+        ]
+        covered = updater.parse_block(block, "secundaria", ("206", "MATEMATIQUES"), require_matching_specialty=False)
+        status = updater.parse_status_block(block, "secundaria", ("206", "MATEMATIQUES"))
+        self.assertEqual(updater.resolve_program_assignments([covered], [status], {"206": "MATEMATIQUES"}), [])
 
     def test_canos_is_geography_but_not_mathematics(self) -> None:
         block = [

@@ -570,6 +570,22 @@ class OfferedPositionUpdateTests(unittest.TestCase):
         self.assertEqual(result, {"matched": 1, "with_observations": 1})
         self.assertEqual(assignment.observations, "PCT Matemàtica")
 
+    def test_program_matches_offered_code_without_losing_either_note(self) -> None:
+        payload = published_payload(
+            "2026-09-03", [sample_item(1, observations="PROA+ fins 30/06/2027")], "ordinary",
+        )
+        self.output.write_text(json.dumps(payload), encoding="utf-8")
+        assignment = SimpleNamespace(
+            slot_id="000001", center_code="03000001", specialty_code="219",
+            post_specialty_code="128", observations="Program note",
+        )
+        result = enrich_assignments_from_offers(
+            output=self.output, assignments=[assignment], academic_year="2026-2027",
+        )
+        self.assertEqual(result["matched"], 1)
+        self.assertEqual(assignment.specialty_code, "219")
+        self.assertEqual(assignment.observations, "Program note; PROA+ fins 30/06/2027")
+
 
 if __name__ == "__main__":
     unittest.main()

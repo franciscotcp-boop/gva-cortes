@@ -518,7 +518,7 @@ def enrich_assignments_from_offers(
         key = (
             normalized_slot(getattr(assignment, "slot_id", "")),
             str(getattr(assignment, "center_code", "")),
-            str(getattr(assignment, "specialty_code", "")),
+            str(getattr(assignment, "post_specialty_code", "") or getattr(assignment, "specialty_code", "")),
         )
         offer = offers.get(key)
         if offer is None:
@@ -527,6 +527,10 @@ def enrich_assignments_from_offers(
             continue
         matched += 1
         observations = direct_observations or compact_text(offer.get("observations"))
+        if getattr(assignment, "post_specialty_code", ""):
+            observations = "; ".join(dict.fromkeys(filter(None, (
+                direct_observations, compact_text(offer.get("observations")),
+            ))))
         setattr(assignment, "observations", observations)
         if observations:
             with_observations += 1
