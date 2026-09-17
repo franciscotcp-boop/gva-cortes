@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "documents": {
+    "e77aaac6db8f3d271312a2a678af9e117655d28918692755bd897c38370463c3": {
+      "source_date": "2026-09-17",
+      "source_url": "https://ceice.gva.es/documents/162909733/414354213/260917_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "883769",
+          "candidate_name": "LLOPIS ENRIQUE, MARIA DEL CARMEN",
+          "center_code": "46023936",
+          "specialty_code": "207",
+          "post_specialty_code": "276",
+          "observations": "276 / AMBIT CIENTIFIC"
+        },
+        {
+          "slot_id": "871064",
+          "candidate_name": "MAGALLO SANCHEZ, MARIA CRISTINA",
+          "center_code": "46002969",
+          "specialty_code": "207",
+          "post_specialty_code": "276",
+          "observations": "276 / AMBIT CIENTIFIC"
+        },
+        {
+          "slot_id": "212420",
+          "candidate_name": "SANCHEZ LOPEZ, LUCIA",
+          "center_code": "46023523",
+          "specialty_code": "203",
+          "post_specialty_code": "275",
+          "observations": "275 / CULTURA CL\u00c0SSICA"
+        },
+        {
+          "slot_id": "905381",
+          "candidate_name": "HERMOSIN CUQUERELLA, PEDRO",
+          "center_code": "03013352",
+          "specialty_code": "256",
+          "post_specialty_code": "277",
+          "observations": "277 / \u00c0MBIT SOCIOLING\u00dc\u00cdSTIC"
+        },
+        {
+          "slot_id": "832674",
+          "candidate_name": "GIMENO DOMINGUEZ, FRANCESC XAVIER",
+          "center_code": "46022919",
+          "specialty_code": "256",
+          "post_specialty_code": "277",
+          "observations": "277 / \u00c0MBIT SOCIOLING\u00dc\u00cdSTIC"
+        }
+      ]
+    }
+  }
+}

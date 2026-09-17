@@ -39,6 +39,7 @@ CENTER_WEB_OVERRIDES_PATH = ROOT / "data" / "center_web_overrides.json"
 POSITIONS_PATH = ROOT / "data" / "posiciones_bolsa.json"
 POSITION_CONTEXT_STATE_PATH = ROOT / "data" / "position_context_state.json"
 OFFERED_POSITIONS_PATH = ROOT / "data" / "puestos_ofertados.json"
+PROGRAM_REVIEWS_PATH = ROOT / "data" / "program_assignment_reviews.json"
 TZ = ZoneInfo("Europe/Madrid")
 
 START_PAGE_URL = "https://ceice.gva.es/es/web/rrhh-educacion/adjudicacion3"
@@ -1110,10 +1111,26 @@ PROGRAM_NOTES = {
 }
 
 
+def load_program_reviews(pdf_sha256: str, path: Path | None = None) -> dict[str, dict]:
+    source = PROGRAM_REVIEWS_PATH if path is None else path
+    if not source.exists():
+        return {}
+    documents = json.loads(source.read_text(encoding="utf-8"))["documents"]
+    entries = documents.get(pdf_sha256, {}).get("assignments", [])
+    result = {}
+    for entry in entries:
+        slot = str(entry["slot_id"])
+        if slot in result:
+            raise ValueError(f"Duplicate reviewed program post {slot}")
+        result[slot] = entry
+    return result
+
+
 def resolve_program_assignments(
     covered: list[Adjudication],
     statuses: list[StatusRecord],
     headers: dict[str, str],
+    reviews: dict[str, dict] | None = None,
 ) -> list[Adjudication]:
     """Keep the originating pool for area/program posts, never ordinary mismatches."""
     awarded: dict[str, set[tuple[str, int]]] = {}
@@ -1130,12 +1147,23 @@ def resolve_program_assignments(
         # A future dedicated pool takes precedence over the program exception.
         if any(code == post.specialty_code for code, _ in candidates):
             continue
+        review = (reviews or {}).get(post.slot_id)
+        if review:
+            if (
+                normalized_name(review["candidate_name"]) != normalized_name(post.candidate_name)
+                or review["center_code"] != post.center_code
+                or review["post_specialty_code"] != post.specialty_code
+            ):
+                raise ValueError(f"Reviewed program identity does not match post {post.slot_id}")
+            candidates = {(code, position) for code, position in candidates if code == review["specialty_code"]}
+            if len(candidates) != 1:
+                raise ValueError(f"Reviewed originating pool not uniquely awarded for post {post.slot_id}")
         if len(candidates) != 1:
             raise ValueError(f"Ambiguous originating pool for program post {post.slot_id}: {sorted(candidates)}")
         code, position = next(iter(candidates))
         if code not in headers:
             raise ValueError(f"Missing originating header {code} for program post {post.slot_id}")
-        note = f"{post.specialty_code} {PROGRAM_NOTES[post.specialty_code]}"
+        note = review["observations"] if review else f"{post.specialty_code} {PROGRAM_NOTES[post.specialty_code]}"
         result.append(replace(
             post, cut=position, specialty_code=code, specialty_name=headers[code],
             post_specialty_code=post.specialty_code,
@@ -1211,7 +1239,7 @@ def parse_pdf(
     if len(statuses) < 1000:
         raise ValueError(f"El PDF de {body} solo contiene {len(statuses)} estados validos")
 
-    rows.extend(resolve_program_assignments(list(covered_assignments.values()), statuses, headers))
+    rows.extend(resolve_program_assignments(list(covered_assignments.values()), statuses, headers, load_program_reviews(sha)))
     valid_rows = [row for row in rows if owning_body_for_specialty(row.specialty_code) == body]
     best: OrderedDict[tuple[str, str], Adjudication] = OrderedDict()
     for row in valid_rows:

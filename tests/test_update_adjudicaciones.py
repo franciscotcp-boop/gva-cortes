@@ -478,6 +478,48 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         with self.assertRaisesRegex(ValueError, "Ambiguous originating pool"):
             updater.resolve_program_assignments([covered], [status, other], {"219": "TECNOLOGIA", "207": "FISICA I QUIMICA"})
 
+    def test_reviewed_programs_are_document_scoped_and_keep_verified_ranks(self) -> None:
+        sha = "e77aaac6db8f3d271312a2a678af9e117655d28918692755bd897c38370463c3"
+        reviews = updater.load_program_reviews(sha)
+        self.assertEqual(len(reviews), 5)
+        self.assertEqual(updater.load_program_reviews("another-document"), {})
+        expected = {"883769": ("207", 19), "871064": ("207", 33),
+                    "212420": ("203", 61), "905381": ("256", 276),
+                    "832674": ("256", 94)}
+        for slot, review in reviews.items():
+            with self.subTest(slot=slot):
+                code, rank = expected[slot]
+                block = [f"999 {review['candidate_name']} Voluntaria",
+                         f"{slot} LOCALIDAD({review['center_code']})IES PRUEBA",
+                         f"{review['post_specialty_code']} / PROGRAMA",
+                         "6 horas SUBSTITUCIO INDETERMINADA Adjudicat"]
+                covered = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"), require_matching_specialty=False)
+                statuses = [updater.StatusRecord(rank, review['candidate_name'], code, "A"),
+                            updater.StatusRecord(999, review['candidate_name'], "219", "A")]
+                headers = {code: "ESPECIALIDAD REVISADA", "219": "TECNOLOGIA"}
+                result = updater.resolve_program_assignments([covered], statuses, headers, reviews)
+                self.assertEqual(len(result), 1)
+                self.assertEqual((result[0].specialty_code, result[0].cut), (code, rank))
+                self.assertEqual(result[0].observations, review['observations'])
+                self.assertEqual(result[0].post_specialty_code, review['post_specialty_code'])
+                with self.assertRaisesRegex(ValueError, "Ambiguous originating pool"):
+                    updater.resolve_program_assignments([covered], statuses, headers)
+                for field, value in (("candidate_name", "OTRA, PERSONA"), ("center_code", "99999999"), ("post_specialty_code", "999")):
+                    bad = {slot: {**review, field: value}}
+                    with self.assertRaisesRegex(ValueError, "identity does not match"):
+                        updater.resolve_program_assignments([covered], statuses, headers, bad)
+                with self.assertRaisesRegex(ValueError, "not uniquely awarded"):
+                    updater.resolve_program_assignments([covered], statuses[1:], headers, reviews)
+                with self.assertRaisesRegex(ValueError, "not uniquely awarded"):
+                    updater.resolve_program_assignments([covered], statuses + [updater.StatusRecord(rank + 1, review['candidate_name'], code, "A")], headers, reviews)
+
+    def test_duplicate_reviewed_program_slots_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "reviews.json"
+            path.write_text(json.dumps({"documents": {"sha": {"assignments": [{"slot_id": "1"}, {"slot_id": "1"}]}}}), encoding="utf8")
+            with self.assertRaisesRegex(ValueError, "Duplicate reviewed"):
+                updater.load_program_reviews("sha", path)
+
     def test_unknown_cross_specialty_code_is_not_a_program_exception(self) -> None:
         block = [
             "1940 CANOS CABEDO, MARIA DE LA PURIFICACION Voluntaria",
