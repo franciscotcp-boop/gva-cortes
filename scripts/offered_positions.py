@@ -69,14 +69,14 @@ def deduplicate_repeated_text(value: str | None) -> str:
 def has_english_requirement(value: str | None) -> bool:
     text = compact_text(value)
     return bool(
-        re.search(r"\bING(?:L[ÉE]S)?\s*-?\s*B2\b", text, re.IGNORECASE)
+        re.search(r"\bING(?:L[ÉE]S)?\s*-?\s*(?:B2|C1|C2)\b", text, re.IGNORECASE)
         or re.search(r"(?:^|\s)/\s*ING\b\.?", text, re.IGNORECASE)
     )
 
 
 def remove_english_requirement(value: str | None) -> str:
     text = re.sub(
-        r"\bING(?:L[ÉE]S)?\s*-?\s*B2\b",
+        r"\bING(?:L[ÉE]S)?\s*-?\s*(?:B2|C1|C2)\b",
         " ",
         compact_text(value),
         flags=re.IGNORECASE,
@@ -87,6 +87,16 @@ def remove_english_requirement(value: str | None) -> str:
         text,
         flags=re.IGNORECASE,
     )
+
+
+def split_linguistic_requirements(value: str | None) -> tuple[str, str]:
+    # The UI has an English badge; retain other languages and stricter levels as notes.
+    higher_english = re.findall(r"\bING(?:L[ÉE]S)?\s*-?\s*C[12]\b", compact_text(value), re.IGNORECASE)
+    text = remove_english_requirement(value)
+    pattern = r"\bFRA\s*-\s*[ABC][12]\b\.?"
+    requirements = higher_english + re.findall(pattern, text, re.IGNORECASE)
+    remaining = compact_text(re.sub(pattern, " ", text, flags=re.IGNORECASE))
+    return remaining, " / ".join(dict.fromkeys(item.strip(" .") for item in requirements))
 
 
 def normalize_date(raw: str) -> str:
@@ -201,7 +211,7 @@ def source_row_hours(page_text: str, order: str, slot_id: str, observations: str
         if not tail.startswith(observations):
             raise ValueError(f"No se pueden separar observaciones y horas en el puesto {slot_id}")
         tail = tail[len(observations):].strip()
-    tail = remove_english_requirement(tail).strip(" .")
+    tail = split_linguistic_requirements(tail)[0].strip(" .")
     if not tail:
         return None
     if not re.fullmatch(r"\d{1,2}(?:[,.]\d+)?", tail):
@@ -341,7 +351,7 @@ def parse_pdf(
                     ),
                 )
 
-                requirement_without_english = remove_english_requirement(requirement)
+                requirement_without_english, language_notes = split_linguistic_requirements(requirement)
                 hours_match = re.search(
                     r"(?<![\w-])(\d{1,2}(?:[,.]\d+)?)(?![\w-])",
                     requirement_without_english,
@@ -365,6 +375,9 @@ def parse_pdf(
                     if source_page_text is None:
                         source_page_text = source_reader.pages[page_number - 1].extract_text() or ""
                     hours = source_row_hours(source_page_text, row["text"], slot_id, observations)
+
+                if language_notes:
+                    observations = " / ".join(filter(None, (observations, language_notes)))
 
                 items.append(
                     [

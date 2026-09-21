@@ -19,6 +19,7 @@ from offered_positions import (
     clean_extracted_center_name,
     has_english_requirement,
     remove_english_requirement,
+    split_linguistic_requirements,
     source_center_name,
     split_difficult_requirement,
     difficult_detail_columns,
@@ -91,6 +92,39 @@ def published_payload(publication_date: str, items: list[list], sha: str) -> dic
 
 
 class OfferedPositionLinkTests(unittest.TestCase):
+    def test_french_requirement_is_not_hours_or_english(self) -> None:
+        for requirement, expected in (("FRA-B2", ""), ("11,5 FRA-B2", "11,5"), ("9 ING-B2 FRA-B2.", "9")):
+            self.assertEqual(split_linguistic_requirements(requirement), (expected, "FRA-B2"))
+        self.assertFalse(has_english_requirement("FRA-B2"))
+        text = "473 SUSTITUCION INDETERMINADARAFELBUNYOL - 46022671 - IES DE RAFELBUNYOL 912650 NO VAL + FRANC.   FRA-B2.\nPag 53 de 83"
+        self.assertIsNone(source_row_hours(text, "473", "912650", "VAL + FRANC."))
+
+    def test_higher_english_levels_remain_explicit(self) -> None:
+        for level in ("C1", "C2"):
+            self.assertTrue(has_english_requirement(f"ING-{level}"))
+            self.assertEqual(split_linguistic_requirements(f"11,5 ING-{level}"), ("11,5", f"ING-{level}"))
+            text = f"496 SUSTITUCION INDETERMINADAALACANT - 03012891 - CENTRE PUBLIC FPA769157 NO ING-{level}.\nPag 66 de 83"
+            self.assertIsNone(source_row_hours(text, "496", "769157", ""))
+
+    def test_ordinary_french_requirement_survives_in_observations(self) -> None:
+        row = {"text": "1", "x0": 30, "top": 200, "bottom": 206}
+        cells = {43: "RAFELBUNYOL - 46022671 - IES DE RAFELBUNYOL", 327: "FRA-B2",
+                 454: "NO VAL + FRANC.", 618: "SUSTITUCION INDETERMINADA"}
+        page = SimpleNamespace(height=595,
+            crop=lambda box: SimpleNamespace(extract_text=lambda **kwargs: cells[box[0]]),
+            extract_text=lambda **kwargs: "ADJUDICACION DE PERSONAL DOCENTE INTERINO DIA 22/09/2026",
+            extract_words=lambda **kwargs: [row])
+        lines = [{"text": "CUERPO/COS: PROFESORES DE ENSEÑANZA SECUNDARIA", "top": 120},
+                 {"text": "ESPECIALIDAD/ESPECIALITAT:256 - LLENGUA VALENCIANA", "top": 140},
+                 {"text": "PROVINCIA/PROVINCIA: VALENCIA", "top": 160}]
+        path = SimpleNamespace(name="test.pdf", read_bytes=lambda: b"test-source")
+        with patch("offered_positions.pdfplumber.open") as opened, \
+             patch("offered_positions.context_lines", return_value=lines), \
+             patch("offered_positions.extract_slot_id", return_value="912650"):
+            opened.return_value.__enter__.return_value.pages = [page]
+            parsed = parse_pdf(path, [], {"46022671": "IES DE RAFELBUNYOL"})
+        self.assertEqual(parsed["items"][0][8:12], [None, False, False, "VAL + FRANC. / FRA-B2"])
+
     def test_source_hours_survive_center_name_overlap(self) -> None:
         text = (
             "651 VACANTE\n46000001: CENTRE A 9,00 hores\n"
