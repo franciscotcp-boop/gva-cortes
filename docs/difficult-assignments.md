@@ -42,6 +42,10 @@ in the client-facing `official_name`. Do not set `pool_identity` or add an empty
 pool row: legacy clients discard empty rows before attaching the ledger. This
 distinct, non-fabricated name ordering lets the client create one unranked
 searchable homonym without reusing the existing person's award or pool ranks.
+Use the surname-first display form for this separate record so both name orders
+return both homonyms through the legacy exact-match search. Keep the original
+PDF name in the evidence. Refresh the pool payload's `generated_at` on manual
+publication, without changing the official publication event identifiers.
 
 An explicit confirmation that an ordinary substitution has ended may use
 `profile_resolution.superseded_ordinary_assignments`. Each item stores the exact
