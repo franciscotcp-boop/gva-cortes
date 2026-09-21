@@ -80,11 +80,60 @@ def make_ledger(winners, offers, positions, publication_date, source_sha, source
             "awards": awards}
 
 
+def _pool_identity(person):
+    return sorted([[str(entry[0]), entry[1]] for entry in person[2]], key=lambda pair: pair[0])
+
+
+def _people_by_name(positions):
+    by_name = defaultdict(list)
+    for person in positions.get("people", []):
+        by_name[normalized_name(person[1])].append(person)
+    return by_name
+
+
+def _award_people(positions, award, by_name=None):
+    if by_name is None:
+        by_name = _people_by_name(positions)
+    matches = by_name.get(normalized_name(award["official_name"]), [])
+    if isinstance(award.get("pool_identity"), list):
+        identity = sorted(award["pool_identity"], key=lambda pair: pair[0])
+        matches = [person for person in matches if _pool_identity(person) == identity]
+    return matches
+
+
+def _apply_confirmed_profile_resolutions(positions, ledger):
+    """Apply scoped owner decisions, preserving pool ranks and assignment history."""
+    by_name = _people_by_name(positions)
+    for award in ledger.get("awards", []):
+        resolution = award.get("profile_resolution")
+        if not resolution:
+            continue
+        if resolution.get("confirmed_by") != "project_owner":
+            raise ValueError("Profile resolution requires explicit owner confirmation")
+        if resolution.get("separate_homonym"):
+            if award.get("pool_identity") != []:
+                raise ValueError("A separate unranked homonym must have an empty pool identity")
+            if not _award_people(positions, award, by_name):
+                person = [award["display_name"], award["official_name"], [], award["body"], None, award["gender"]]
+                positions.setdefault("people", []).append(person)
+                by_name[normalized_name(award["official_name"])].append(person)
+        matches = _award_people(positions, award, by_name)
+        if len(matches) != 1:
+            raise ValueError("Confirmed profile resolution no longer identifies one person")
+        # Only the exact, confirmed ended assignment is cleared. Future awards survive.
+        for ended in resolution.get("superseded_ordinary_assignments", []):
+            for entry in matches[0][2]:
+                if (len(entry) > 9 and entry[8] == "A" and str(entry[0]) == ended["specialty_code"]
+                        and entry[9] == ended["detail"]):
+                    entry[8], entry[9] = "N", None
+
+
 def attach_ledger(positions, ledger):
-    """Only append an optional extension. No ranks, statuses, cuts or notification stamps change."""
+    """Attach the extension and explicit profile resolutions; never change ranks or cuts."""
     if ledger.get("status") != "definitive" or any(a.get("provisional") is not False for a in ledger.get("awards", [])):
         raise ValueError("Only verified released awards may be attached")
     if ledger.get("academic_year", "").replace("-", "/") == positions.get("academic_year", "").replace("-", "/"):
+        _apply_confirmed_profile_resolutions(positions, ledger)
         positions["difficult_assignments"] = ledger
         labels = ledger.get("specialties", [])
         if labels:
@@ -159,12 +208,16 @@ def preserve_ledger(positions, data_directory):
     path = Path(data_directory) / "difficult_assignments.json"
     if path.exists():
         ledger = json.loads(path.read_text(encoding="utf-8"))
-        assigned = {normalized_name(person[1]) for person in positions.get("people", [])
-                    if any(len(entry) > 8 and entry[8] == "A" for entry in person[2])}
+        if ledger.get("academic_year", "").replace("-", "/") != positions.get("academic_year", "").replace("-", "/"):
+            positions.pop("difficult_assignments", None)
+            return
+        _apply_confirmed_profile_resolutions(positions, ledger)
         # Official assignments supersede emergency directory evidence, regardless of PDF date.
+        by_name = _people_by_name(positions)
         ledger["awards"] = [award for award in ledger.get("awards", [])
                             if not (award.get("verification", {}).get("assignment_inference") and
-                                    normalized_name(award["official_name"]) in assigned)]
+                                    any(len(entry) > 8 and entry[8] == "A"
+                                        for person in _award_people(positions, award, by_name) for entry in person[2]))]
         attach_ledger(positions, ledger)
 
 

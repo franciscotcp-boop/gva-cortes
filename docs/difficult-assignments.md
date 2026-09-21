@@ -17,7 +17,7 @@ ordinary assignments, homonyms, and multiple possible posts at the same school
 must remain pending for manual resolution. No result is not proof that a person
 was not awarded; it must not clear an existing assignment.
 
-Official award PDFs always take priority over directory-based inferences. The
+By default, official award PDFs take priority over directory-based inferences. The
 review importer rejects people with an existing official award. Subsequent
 automatic rebuilds suppress a directory inference if an official award appears,
 including a correction to an older PDF; they never change that PDF's assignment.
@@ -26,6 +26,28 @@ difficult-coverage round or attributing another inferred post to its awardee.
 Also review later offer snapshots and filled-post reconciliation by post ID: a
 post reoffered or officially assigned after the reviewed round cannot be dated
 to that earlier round from current workplace evidence alone.
+
+The owner has manually resolved exceptions for the 11 September round. These
+are not blanket permission to ignore PDFs or infer future awards. Record each
+choice in the award's `verification.manual_confirmation`. A later reoffer alone
+does not invalidate an owner-confirmed placement from this round. Where several
+posts at the confirmed school have identical visible conditions, `slot_id` is
+null and `possible_slot_ids` retains the alternatives; do not invent a post ID.
+
+`pool_identity` selects a specific existing homonym without changing her ranks.
+For a confirmed separate person outside the pool, use an empty identity plus
+`profile_resolution.separate_homonym` to create one unranked searchable record,
+leaving the existing person's award intact. This record is recreated idempotently
+on refresh and is scoped to the academic year.
+
+An explicit confirmation that an ordinary substitution has ended may use
+`profile_resolution.superseded_ordinary_assignments`. Each item stores the exact
+specialty and full original detail; only that exact active detail becomes N/null
+in the personal profile. Keep its historical assignment and all cutoffs intact.
+A different or newer ordinary award is not cleared. Both continuous updates and
+pool rebuilds reapply the reviewed resolutions before publishing. The current
+exception is Hector Cosa Selva's ended 266 substitution; Lidia Marton Bedia keeps
+her ordinary IES Pou Clar award.
 
 The provisional PDF supplies the ordered candidates and post header; the saved
 offer snapshot supplies hours, notes and other working conditions. The staff
@@ -43,7 +65,8 @@ PDF as definitive. The normal PDF importer still rejects provisional documents.
 
 Released awards use the optional `difficult_assignments` extension in the pool
 JSON, backed by a separate ledger. They never become cuts or lottery-based pool
-ranks. Existing people, ranks and regular notification timestamps are unchanged.
+ranks. Ranks and regular notification timestamps are unchanged. Existing profile
+statuses only change for explicitly confirmed, narrowly scoped resolutions above.
 Optional specialty labels can complete missing catalog names in both languages;
 they do not add a person to a pool or create a rank.
 

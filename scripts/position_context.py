@@ -1371,6 +1371,8 @@ class PositionContextUpdater:
     def save(self) -> bool:
         if not self.enabled or not self.dirty:
             return False
+        from difficult_assignments import preserve_ledger
+        preserve_ledger(self.positions, self.positions_path.parent)
         self.positions_path.write_text(
             json.dumps(self.positions, ensure_ascii=False, separators=(",", ":")) + "\n",
             encoding="utf-8",

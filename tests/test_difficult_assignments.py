@@ -161,6 +161,94 @@ class DifficultAssignmentsTest(unittest.TestCase):
         corrected = {**incoming, "awards": [{"date": "2026-09-18", "id": "corrected"}]}
         self.assertEqual([a["id"] for a in merge_ledger(merged, corrected)["awards"]], ["old", "corrected"])
 
+    def resolved_fixture(self):
+        review, offer, positions = self.directory_fixture()
+        ledger = make_directory_review_ledger([review], [offer], positions, "2026-09-11", "hash", "test.pdf")
+        detail = ["C", "2026-09-15", "sub_indeterminada", "C", "03004341", False, False, "School", "Town", ""]
+        person = ["Test", review["winner"]["candidate_name"],
+                  [["266", 43, 34, 8, 1, None, None, None, "A", detail]], "otros", None, "f"]
+        positions["people"] = [person]
+        award = ledger["awards"][0]
+        award["pool_identity"] = [["266", 43]]
+        award["profile_resolution"] = {"confirmed_by": "project_owner", "superseded_ordinary_assignments": [
+            {"specialty_code": "266", "detail": copy.deepcopy(detail)}]}
+        return positions, ledger
+
+    def test_confirmed_ended_assignment_only_clears_matching_detail(self):
+        positions, ledger = self.resolved_fixture()
+        before = copy.deepcopy(positions["people"][0][2][0])
+        attach_ledger(positions, ledger)
+        self.assertEqual(positions["people"][0][2][0][:8], before[:8])
+        self.assertEqual(positions["people"][0][2][0][8:], ["N", None])
+        attach_ledger(positions, ledger)
+        self.assertEqual(positions["people"][0][2][0][8:], ["N", None])
+
+    def test_rebuild_keeps_manual_resolution_but_respects_future_awards(self):
+        for newer in (False, True):
+            positions, ledger = self.resolved_fixture()
+            if newer:
+                positions["people"][0][2][0][9][1] = "2026-09-24"
+            with self.subTest(newer=newer), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+                preserve_ledger(positions, directory)
+                self.assertEqual(len(positions["difficult_assignments"]["awards"]), 0 if newer else 1)
+                self.assertEqual(positions["people"][0][2][0][8], "A" if newer else "N")
+
+    def test_homonyms_are_separate_and_do_not_steal_existing_award(self):
+        positions, ledger = self.resolved_fixture()
+        before = copy.deepcopy(positions["people"][0])
+        award = ledger["awards"][0]
+        award["pool_identity"] = []
+        award["profile_resolution"] = {"confirmed_by": "project_owner", "separate_homonym": True}
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+            preserve_ledger(positions, directory)
+            preserve_ledger(positions, directory)
+        self.assertEqual(len(positions["people"]), 2)
+        self.assertEqual(positions["people"][0], before)
+        self.assertEqual(positions["people"][1][2], [])
+        self.assertEqual(len(positions["difficult_assignments"]["awards"]), 1)
+
+    def test_confirmed_pool_homonym_does_not_inherit_other_person_assignment(self):
+        positions, ledger = self.resolved_fixture()
+        positions["people"].append(["Other", positions["people"][0][1], [["128", 10023]], "maestros", None, "f"])
+        ledger["awards"][0]["pool_identity"] = [["128", 10023]]
+        ledger["awards"][0].pop("profile_resolution")
+        before = copy.deepcopy(positions["people"])
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+            preserve_ledger(positions, directory)
+        self.assertEqual(positions["people"], before)
+        self.assertEqual(len(positions["difficult_assignments"]["awards"]), 1)
+
+    def test_manual_resolution_is_year_scoped_and_requires_confirmation(self):
+        positions, ledger = self.resolved_fixture()
+        positions["academic_year"] = "2027/2028"
+        before = copy.deepcopy(positions)
+        attach_ledger(positions, ledger)
+        self.assertEqual(positions, before)
+        positions["academic_year"] = "2026/2027"
+        ledger["awards"][0]["profile_resolution"]["confirmed_by"] = "unreviewed"
+        with self.assertRaisesRegex(ValueError, "explicit owner"):
+            attach_ledger(positions, ledger)
+
+    def test_continuous_save_reapplies_confirmed_profile_resolution(self):
+        from position_context import PositionContextUpdater
+        positions, ledger = self.resolved_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+            updater = PositionContextUpdater.__new__(PositionContextUpdater)
+            updater.enabled = updater.dirty = True
+            updater.positions = positions
+            updater.positions_path = root / "posiciones_bolsa.json"
+            updater.state_path = root / "position_context_state.json"
+            updater.state = {"historical_assignment": "unchanged"}
+            self.assertTrue(updater.save())
+            saved = json.loads(updater.positions_path.read_text(encoding="utf8"))
+            self.assertEqual(saved["people"][0][2][0][8:], ["N", None])
+            self.assertEqual(json.loads(updater.state_path.read_text(encoding="utf8")), updater.state)
+
 
 if __name__ == "__main__":
     unittest.main()
