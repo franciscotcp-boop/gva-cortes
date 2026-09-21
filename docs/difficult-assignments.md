@@ -1,16 +1,51 @@
-# Definitive Difficult-Coverage Assignments
+# Difficult-Coverage Assignments
 
-Status: waiting for the definitive result PDF. Do not publish provisional winners.
+Status: provisional arrows are not publishable. The owner has now requested
+individual cross-checks against the official GVA staff directory because no
+definitive result PDF will be published for this round.
 
 The 11 September participant PDF is provisional. Its arrows do not confirm that
 candidates attended or met the qualification requirements. No awards from that
-document are present in the public runtime data.
+document may be published merely because they are arrow-marked.
+
+## Manually Reviewed Directory Evidence
+
+`make_directory_review_ledger` accepts a separate, reviewed evidence record for
+each assignment. It requires a single exact normalized-name result, a verified
+school code, official directory URLs, and the check timestamp. Conflicting
+ordinary assignments, homonyms, and multiple possible posts at the same school
+must remain pending for manual resolution. No result is not proof that a person
+was not awarded; it must not clear an existing assignment.
+
+Official award PDFs always take priority over directory-based inferences. The
+review importer rejects people with an existing official award. Subsequent
+automatic rebuilds suppress a directory inference if an official award appears,
+including a correction to an older PDF; they never change that PDF's assignment.
+Merging a directory review also rejects replacing a previously imported official
+difficult-coverage round or attributing another inferred post to its awardee.
+Also review later offer snapshots and filled-post reconciliation by post ID: a
+post reoffered or officially assigned after the reviewed round cannot be dated
+to that earlier round from current workplace evidence alone.
+
+The provisional PDF supplies the ordered candidates and post header; the saved
+offer snapshot supplies hours, notes and other working conditions. The staff
+directory confirms current workplace, not the exact award date, specialty or
+post identifier. This method is therefore an explicitly requested cross-reference,
+not an official definitive adjudication resolution. Record that distinction in
+`verification_basis`, `source.document_type`, `source.is_definitive_resolution`
+and the per-award `verification` object.
+
+The existing clients require the compatibility value `status: definitive` for
+a released ledger. That value must not be used to describe the provisional source
+PDF as definitive. The normal PDF importer still rejects provisional documents.
 
 ## Data Boundary
 
-Definitive awards use the optional `difficult_assignments` extension in the pool
+Released awards use the optional `difficult_assignments` extension in the pool
 JSON, backed by a separate ledger. They never become cuts or lottery-based pool
 ranks. Existing people, ranks and regular notification timestamps are unchanged.
+Optional specialty labels can complete missing catalog names in both languages;
+they do not add a person to a pool or create a rank.
 
 The importer requires an explicitly reviewed definitive document and rejects
 provisional headings. Recheck the extraction layout when that document arrives;
@@ -21,6 +56,9 @@ Match names without accent differences. Never resolve homonyms by lottery order.
 
 - The awarded specialty comes first, with the awarded and difficult-coverage badges.
 - If the person already belongs to that specialty pool, retain all its numbers.
+- For master special-education posts 151/152, reuse the existing 126/127 pool
+  only when that person is already registered there. Preserve the original post
+  specialty in `offered_specialty_code`; never invent a pool entry or number.
 - Otherwise show an independent award card, without inventing membership or ranks.
 - Include the existing center details, contacts, location controls and award date.
 - Keep other specialty cards and ranks below, with a not-awarded display status.
@@ -45,6 +83,6 @@ specialty outside their registered pools can be displayed correctly.
 5. Validate the ledger, personal cards, unchanged cuts, and unchanged notification
    publication stamps before publishing the JSON and independent ledger together.
 
-The provisional participant PDF has not been imported. No automatic watcher for
+Provisional arrows have not been imported as awards. No automatic watcher for
 definitive difficult-coverage results has been added. The future definitive layout
 may require an extractor adjustment, but the published client contract is ready.

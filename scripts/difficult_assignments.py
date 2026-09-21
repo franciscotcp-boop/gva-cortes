@@ -6,8 +6,9 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlparse
 
-from position_context import normalized_name
+from position_context import MASTER_PROFILE_ALIASES, normalized_name
 
 
 def parse_page(text, page_number):
@@ -54,12 +55,19 @@ def make_ledger(winners, offers, positions, publication_date, source_sha, source
         name = winner["candidate_name"]
         matches = by_name[normalized_name(name)]
         surnames, given = name.split(",", 1)
+        profile_code = winner["specialty_code"]
+        if offer["body"] == "maestros" and profile_code in {"151", "152"} and len(matches) == 1:
+            registered = {str(entry[0]) for entry in matches[0][2]}
+            alias = MASTER_PROFILE_ALIASES[profile_code]
+            if profile_code not in registered and alias in registered:
+                profile_code = alias
         awards.append({
             "id": f"{publication_date}:{slot}", "official_name": name,
             "display_name": (given.strip() + " " + surnames).title(),
             "gender": matches[0][5] if len(matches) == 1 else "u",
             "identity_status": "ambiguous" if len(matches) > 1 else "unique" if matches else "not_in_pool",
-            "body": offer["body"], "specialty_code": winner["specialty_code"],
+            "body": offer["body"], "specialty_code": profile_code,
+            "offered_specialty_code": winner["specialty_code"],
             "slot_id": slot, "date": publication_date, "provisional": provisional,
             "source_page": winner["page"],
             "source_sha256": source_sha,
@@ -75,18 +83,89 @@ def make_ledger(winners, offers, positions, publication_date, source_sha, source
 def attach_ledger(positions, ledger):
     """Only append an optional extension. No ranks, statuses, cuts or notification stamps change."""
     if ledger.get("status") != "definitive" or any(a.get("provisional") is not False for a in ledger.get("awards", [])):
-        raise ValueError("Only verified definitive awards may be attached")
+        raise ValueError("Only verified released awards may be attached")
     if ledger.get("academic_year", "").replace("-", "/") == positions.get("academic_year", "").replace("-", "/"):
         positions["difficult_assignments"] = ledger
+        labels = ledger.get("specialties", [])
+        if labels:
+            catalog = positions.setdefault("specialties", [])
+            known = {str(item["code"]) for item in catalog}
+            awarded = {str(award["specialty_code"]) for award in ledger.get("awards", [])}
+            for item in labels:
+                code = str(item.get("code", ""))
+                if code in awarded and code not in known and item.get("es") and item.get("va"):
+                    catalog.append(dict(item))
+                    known.add(code)
     else:
         positions.pop("difficult_assignments", None)
     return positions
 
 
+def make_directory_review_ledger(reviews, offers, positions, assignment_date, source_sha, source_name, specialty_labels=()):
+    """Publish reviewed directory cross-references, never the provisional arrows.
+
+    The legacy client value 'definitive' means released rather than a claim that
+    the candidate PDF is a definitive resolution. Keep the actual evidence basis.
+    """
+    winners = []
+    evidence_by_slot = {}
+    identities = set()
+    people = defaultdict(list)
+    for person in positions.get("people", []):
+        people[normalized_name(person[1])].append(person)
+    for review in reviews:
+        winner = review["winner"]
+        evidence = review["evidence"]
+        if review.get("decision") != "verified_center_match":
+            raise ValueError("Unreviewed directory match")
+        identity = normalized_name(winner["candidate_name"])
+        matches = people[identity]
+        if len(matches) > 1:
+            raise ValueError("Directory evidence alone cannot resolve pool homonyms")
+        if any(len(entry) > 8 and entry[8] == "A" for person in matches for entry in person[2]):
+            raise ValueError("Official PDF assignments take priority over directory inferences")
+        if identity in identities:
+            raise ValueError("A directory center alone cannot resolve multiple posts for one person")
+        identities.add(identity)
+        if normalized_name(evidence.get("official_name")) != identity:
+            raise ValueError("Directory identity differs from candidate")
+        if str(evidence.get("center_code")) != str(winner["center_code"]):
+            raise ValueError("Directory center differs from offered center")
+        if evidence.get("exact_name_results") != 1 or not evidence.get("checked_at"):
+            raise ValueError("Ambiguous or undated directory evidence")
+        for field in ("search_url", "department_url"):
+            url = urlparse(str(evidence.get(field, "")))
+            if url.scheme != "https" or url.hostname != "sede.gva.es":
+                raise ValueError("Evidence must refer to the official directory")
+        if review.get("competing_assignment") or review.get("multiple_possible_posts") or review.get("later_post_evidence"):
+            raise ValueError("Conflicting assignment requires separate manual confirmation")
+        winners.append(winner)
+        evidence_by_slot[str(winner["slot_id"])] = evidence
+    ledger = make_ledger(winners, offers, positions, assignment_date, source_sha, source_name)
+    ledger["verification_basis"] = "reviewed_directory_cross_reference"
+    ledger["source"]["document_type"] = "provisional_candidate_list"
+    ledger["source"]["is_definitive_resolution"] = False
+    ledger["source"]["directory_url"] = "https://sede.gva.es/va/cercador-persones"
+    awarded_codes = {award["specialty_code"] for award in ledger["awards"]}
+    ledger["specialties"] = [dict(item) for item in specialty_labels if str(item["code"]) in awarded_codes]
+    for award in ledger["awards"]:
+        award["verification"] = {**evidence_by_slot[award["slot_id"]],
+                                 "assignment_inference": "ordered_candidate_and_current_workplace_match",
+                                 "is_definitive_resolution": False}
+    return ledger
+
+
 def preserve_ledger(positions, data_directory):
     path = Path(data_directory) / "difficult_assignments.json"
     if path.exists():
-        attach_ledger(positions, json.loads(path.read_text(encoding="utf-8")))
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+        assigned = {normalized_name(person[1]) for person in positions.get("people", [])
+                    if any(len(entry) > 8 and entry[8] == "A" for entry in person[2])}
+        # Official assignments supersede emergency directory evidence, regardless of PDF date.
+        ledger["awards"] = [award for award in ledger.get("awards", [])
+                            if not (award.get("verification", {}).get("assignment_inference") and
+                                    normalized_name(award["official_name"]) in assigned)]
+        attach_ledger(positions, ledger)
 
 
 def merge_ledger(previous, incoming):
@@ -94,10 +173,20 @@ def merge_ledger(previous, incoming):
     if not previous or previous.get("academic_year") != incoming.get("academic_year"):
         return incoming
     new_date = incoming["source"]["date"]
+    if incoming.get("verification_basis") == "reviewed_directory_cross_reference":
+        incoming_names = {normalized_name(award["official_name"]) for award in incoming["awards"]}
+        official = [award for award in previous["awards"]
+                    if not award.get("verification", {}).get("assignment_inference")]
+        if any(award["date"] == new_date or normalized_name(award["official_name"]) in incoming_names
+               for award in official):
+            raise ValueError("Official PDF difficult-coverage awards take priority over directory inferences")
     retained = [a for a in previous["awards"] if a["date"] != new_date]
     sources = {s["date"]: s for s in previous.get("sources", [previous["source"]])}
     sources[new_date] = incoming["source"]
-    return {**incoming, "sources": list(sources.values()), "awards": retained + incoming["awards"]}
+    labels = {str(item["code"]): item for item in previous.get("specialties", [])}
+    labels.update({str(item["code"]): item for item in incoming.get("specialties", [])})
+    return {**incoming, "sources": list(sources.values()), "awards": retained + incoming["awards"],
+            "specialties": list(labels.values())}
 
 
 def main():
