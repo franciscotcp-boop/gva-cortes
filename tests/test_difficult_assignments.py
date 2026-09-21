@@ -198,15 +198,17 @@ class DifficultAssignmentsTest(unittest.TestCase):
         positions, ledger = self.resolved_fixture()
         before = copy.deepcopy(positions["people"][0])
         award = ledger["awards"][0]
-        award["pool_identity"] = []
+        award.pop("pool_identity")
+        award["source_official_name"] = award["official_name"]
+        surnames, given = award["official_name"].split(",", 1)
+        award["official_name"] = given.strip() + " " + surnames
         award["profile_resolution"] = {"confirmed_by": "project_owner", "separate_homonym": True}
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
             preserve_ledger(positions, directory)
             preserve_ledger(positions, directory)
-        self.assertEqual(len(positions["people"]), 2)
+        self.assertEqual(len(positions["people"]), 1)
         self.assertEqual(positions["people"][0], before)
-        self.assertEqual(positions["people"][1][2], [])
         self.assertEqual(len(positions["difficult_assignments"]["awards"]), 1)
 
     def test_confirmed_pool_homonym_does_not_inherit_other_person_assignment(self):

@@ -35,10 +35,13 @@ posts at the confirmed school have identical visible conditions, `slot_id` is
 null and `possible_slot_ids` retains the alternatives; do not invent a post ID.
 
 `pool_identity` selects a specific existing homonym without changing her ranks.
-For a confirmed separate person outside the pool, use an empty identity plus
-`profile_resolution.separate_homonym` to create one unranked searchable record,
-leaving the existing person's award intact. This record is recreated idempotently
-on refresh and is scoped to the academic year.
+For a confirmed separate person outside the pool, set
+`profile_resolution.separate_homonym`, retain the PDF name in
+`source_official_name`, and use that same full name in given-name-first order
+in the client-facing `official_name`. Do not set `pool_identity` or add an empty
+pool row: legacy clients discard empty rows before attaching the ledger. This
+distinct, non-fabricated name ordering lets the client create one unranked
+searchable homonym without reusing the existing person's award or pool ranks.
 
 An explicit confirmation that an ordinary substitution has ended may use
 `profile_resolution.superseded_ordinary_assignments`. Each item stores the exact

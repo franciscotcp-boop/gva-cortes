@@ -111,12 +111,13 @@ def _apply_confirmed_profile_resolutions(positions, ledger):
         if resolution.get("confirmed_by") != "project_owner":
             raise ValueError("Profile resolution requires explicit owner confirmation")
         if resolution.get("separate_homonym"):
-            if award.get("pool_identity") != []:
-                raise ValueError("A separate unranked homonym must have an empty pool identity")
-            if not _award_people(positions, award, by_name):
-                person = [award["display_name"], award["official_name"], [], award["body"], None, award["gender"]]
-                positions.setdefault("people", []).append(person)
-                by_name[normalized_name(award["official_name"])].append(person)
+            # Legacy clients discard empty pool rows. Their award importer can create
+            # an unranked person using the same full name in given-name-first order.
+            surnames, given = award.get("source_official_name", "").split(",", 1)
+            if ("pool_identity" in award or
+                    normalized_name(award["official_name"]) != normalized_name(given + " " + surnames)):
+                raise ValueError("Separate homonym requires a verified given-name-first client identity")
+            continue
         matches = _award_people(positions, award, by_name)
         if len(matches) != 1:
             raise ValueError("Confirmed profile resolution no longer identifies one person")
