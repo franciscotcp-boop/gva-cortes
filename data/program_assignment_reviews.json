@@ -1,6 +1,37 @@
 {
   "schema_version": 1,
   "documents": {
+    "9605c0da31a326fdfee1dca174e1989f1da833bd7814a426ed721fd4e5510b08": {
+      "source_date": "2026-09-22",
+      "source_url": "https://ceice.gva.es/documents/162909733/414354213/260922_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "907991",
+          "candidate_name": "GARCIA VILLENA, MIGUEL",
+          "center_code": "12002671",
+          "specialty_code": "204",
+          "post_specialty_code": "277",
+          "observations": "277 / \u00c1mbito Socioling\u00fc\u00edstico / \u00c0mbit Socioling\u00fc\u00edstic"
+        },
+        {
+          "slot_id": "767275",
+          "candidate_name": "BOU GARCIA, BORJA",
+          "center_code": "46019261",
+          "specialty_code": "256",
+          "post_specialty_code": "297",
+          "observations": "297 / FPA Comunicaci\u00f3n (Valenciano) / FPA Comunicaci\u00f3 (Valenci\u00e0)"
+        },
+        {
+          "slot_id": "924524",
+          "candidate_name": "APARICI GALDON, NURIA LLEDO",
+          "center_code": "12003705",
+          "specialty_code": "207",
+          "post_specialty_code": "276",
+          "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
+        }
+      ]
+    },
     "e77aaac6db8f3d271312a2a678af9e117655d28918692755bd897c38370463c3": {
       "source_date": "2026-09-17",
       "source_url": "https://ceice.gva.es/documents/162909733/414354213/260917_lis_sec.pdf",

@@ -520,6 +520,19 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
             with self.assertRaisesRegex(ValueError, "Duplicate reviewed"):
                 updater.load_program_reviews("sha", path)
 
+    def test_fpa_295_uses_unique_english_pool_and_keeps_its_requirement(self) -> None:
+        block = ["57 HERNANDEZ BERTO, ANA Voluntaria",
+                 "769157 ALACANT(03012891)CENTRE PUBLIC FPA PROFESOR ALBERTO BARRIOS",
+                 "295 / FPA COMUNICACIO (VALENCIA/ANGLES)",
+                 "Jornada completa / ING. SUBSTITUCIO INDETERMINADA Adjudicat"]
+        post = updater.parse_block(block, "secundaria", ("211", "ANGLES"), require_matching_specialty=False)
+        status = updater.parse_status_block(block, "secundaria", ("211", "ANGLES"))
+        resolved = updater.resolve_program_assignments([post], [status], {"211": "ANGLES"})
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual((resolved[0].specialty_code, resolved[0].cut, resolved[0].post_specialty_code), ("211", 57, "295"))
+        self.assertTrue(resolved[0].english_requirement)
+        self.assertIn("295", resolved[0].observations)
+
     def test_unknown_cross_specialty_code_is_not_a_program_exception(self) -> None:
         block = [
             "1940 CANOS CABEDO, MARIA DE LA PURIFICACION Voluntaria",
@@ -1163,6 +1176,47 @@ class DuplicatePdfTests(unittest.TestCase):
         parse_pdf.assert_not_called()
         self.assertEqual(data["processed_pdfs"][official_url]["duplicate_of"], original_url)
         self.assertEqual(data["processed_pdfs"][official_url]["body"], "maestros")
+
+
+class IncompletePublicationTests(unittest.TestCase):
+    def test_failed_pdf_prevents_partial_results_profiles_and_offer_removal(self) -> None:
+        for mode in ("inicio", "curso"):
+            for failure in (ValueError("Ambiguous originating pool"), TimeoutError("sin respuesta")):
+                with self.subTest(mode=mode, failure=type(failure).__name__):
+                    data = json.loads(json.dumps(updater.DEFAULT_DATA))
+                    before = json.loads(json.dumps(data))
+                    context = MagicMock()
+                    valid = updater.ParsedPdf("https://example.test/260922_lis_mae.pdf", "mae-sha",
+                                              "maestros", "2026-09-22", [], [], [], [])
+                    links = [{"url": valid.url, "text": "Maestros 22/09/2026"},
+                             {"url": "https://example.test/260922_lis_sec.pdf", "text": "Secundaria 22/09/2026"}]
+                    with patch.object(updater, "extract_pdf_links", return_value=links), \
+                         patch.object(updater, "http_get", return_value=b"pdf"), \
+                         patch.object(updater, "parse_pdf", side_effect=[valid, failure]), \
+                         patch.object(updater, "apply_inicio") as apply_start, \
+                         patch.object(updater, "apply_curso") as apply_course, \
+                         patch.object(updater, "reconcile_after_adjudication") as reconcile:
+                        with self.assertRaisesRegex(RuntimeError, "Actualizacion incompleta.*260922_lis_sec"):
+                            updater.run_mode(data, mode, {}, "2026-2027", context)
+                    self.assertEqual(data, before)
+                    apply_start.assert_not_called()
+                    apply_course.assert_not_called()
+                    context.apply.assert_not_called()
+                    reconcile.assert_not_called()
+
+    def test_ambiguity_error_lists_every_post_requiring_owner_review(self) -> None:
+        posts, statuses = [], []
+        for slot, name in (("907991", "PRUEBA, MIGUEL"), ("907992", "PRUEBA, MARTA")):
+            block = [f"115 {name} Voluntaria", f"{slot} LOCALIDAD(12002671)IES PRUEBA",
+                     "277 / AMBIT SOCIOLINGUISTIC", "6 horas SUBSTITUCIO INDETERMINADA Adjudicat"]
+            posts.append(updater.parse_block(block, "secundaria", ("211", "ANGLES"), require_matching_specialty=False))
+            statuses.extend([updater.StatusRecord(115, name, "211", "A"),
+                             updater.StatusRecord(466, name, "204", "A")])
+        with self.assertRaises(ValueError) as result:
+            updater.resolve_program_assignments(posts, statuses, {"204": "CASTELLANO", "211": "ANGLES"})
+        message = str(result.exception)
+        for value in ("Ambiguous originating pool", "907991", "907992", "PRUEBA, MIGUEL", "PRUEBA, MARTA"):
+            self.assertIn(value, message)
 
 
 if __name__ == "__main__":

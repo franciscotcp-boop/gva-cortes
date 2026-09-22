@@ -1107,6 +1107,7 @@ PROGRAM_NOTES = {
     "276": "\u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic",
     "277": "\u00c1mbito Socioling\u00fc\u00edstico / \u00c0mbit Socioling\u00fc\u00edstic",
     "293": "FPA Ciencias Sociales / FPA Ci\u00e8ncies Socials",
+    "295": "FPA Comunicaci\u00f3n (Valenciano/Ingl\u00e9s) / FPA Comunicaci\u00f3 (Valenci\u00e0/Angl\u00e9s)",
     "297": "FPA Comunicaci\u00f3n (Valenciano) / FPA Comunicaci\u00f3 (Valenci\u00e0)",
 }
 
@@ -1140,6 +1141,7 @@ def resolve_program_assignments(
                 (status.specialty_code, status.position)
             )
     result = []
+    pending_reviews = []
     for post in covered:
         if post.body != "secundaria" or post.specialty_code not in PROGRAM_NOTES:
             continue
@@ -1159,7 +1161,11 @@ def resolve_program_assignments(
             if len(candidates) != 1:
                 raise ValueError(f"Reviewed originating pool not uniquely awarded for post {post.slot_id}")
         if len(candidates) != 1:
-            raise ValueError(f"Ambiguous originating pool for program post {post.slot_id}: {sorted(candidates)}")
+            pending_reviews.append(
+                f"{post.slot_id} ({post.candidate_name}, {post.center_code}, "
+                f"program {post.specialty_code}): {sorted(candidates)}"
+            )
+            continue
         code, position = next(iter(candidates))
         if code not in headers:
             raise ValueError(f"Missing originating header {code} for program post {post.slot_id}")
@@ -1169,6 +1175,8 @@ def resolve_program_assignments(
             post_specialty_code=post.specialty_code,
             observations="; ".join(filter(None, (post.observations, note))),
         ))
+    if pending_reviews:
+        raise ValueError("Ambiguous originating pool for program posts: " + "; ".join(pending_reviews))
     return result
 
 
@@ -1968,6 +1976,7 @@ def run_mode(
     links = extract_pdf_links(page_url)
     print(f"{mode}: encontrados {len(links)} enlaces PDF")
     parsed_items: list[ParsedPdf] = []
+    failed_sources: list[str] = []
     changed = False
     for link in links:
         if url_already_seen(data, link["url"]):
@@ -2024,6 +2033,13 @@ def run_mode(
             print(f"{mode}: nuevo PDF {parsed.body} {parsed.published_date or 'sin fecha'} {link['url']} filas={len(parsed.rows)}")
         except Exception as exc:
             print(f"WARNING: no se pudo procesar {link['url']}: {exc}", file=sys.stderr)
+            failed_sources.append(f"{link['url']}: {exc}")
+    # Do not publish one body's new results while silently keeping the other stale.
+    if failed_sources:
+        raise RuntimeError(
+            "Actualizacion incompleta; se conservan los datos publicados. "
+            "Fuentes pendientes: " + "; ".join(failed_sources)
+        )
     if mode == "inicio":
         result = apply_inicio(data, parsed_items) or changed
         result = apply_vacancy_totals_inicio(data, parsed_items) or result
