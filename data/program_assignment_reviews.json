@@ -1,6 +1,21 @@
 {
   "schema_version": 1,
   "documents": {
+    "5f523e1e98ecccade21ef8a83bd58cba11997bd01c1cf7e72bb509d420d742bc": {
+      "source_date": "2026-09-24",
+      "source_url": "https://ceice.gva.es/documents/162909733/414354213/260924_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "767331",
+          "candidate_name": "CRUSELLES SESER, MARINA",
+          "center_code": "46017651",
+          "specialty_code": "211",
+          "post_specialty_code": "295",
+          "observations": "295 / FPA Comunicaci\u00f3n (Valenciano/Ingl\u00e9s) / FPA Comunicaci\u00f3 (Valenci\u00e0/Angl\u00e9s)"
+        }
+      ]
+    },
     "9605c0da31a326fdfee1dca174e1989f1da833bd7814a426ed721fd4e5510b08": {
       "source_date": "2026-09-22",
       "source_url": "https://ceice.gva.es/documents/162909733/414354213/260922_lis_sec.pdf",
