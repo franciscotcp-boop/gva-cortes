@@ -26,6 +26,7 @@ from offered_positions import (
     parse_difficult_pdf,
     parse_pdf,
     source_row_hours,
+    source_row_composition,
 )
 from update_offered_positions import (
     academic_year_for_check,
@@ -157,7 +158,7 @@ class OfferedPositionLinkTests(unittest.TestCase):
                         618: "SUSTITUCION INDETERMINADA"}[left]
             return SimpleNamespace(extract_text=lambda **kwargs: text)
 
-        page = SimpleNamespace(height=595, crop=crop,
+        page = SimpleNamespace(height=595, width=842, crop=crop,
             extract_text=lambda **kwargs: "ADJUDICACION DE PERSONAL DOCENTE INTERINO DIA 15/09/2026",
             extract_words=lambda **kwargs: words)
         lines = [
@@ -166,14 +167,35 @@ class OfferedPositionLinkTests(unittest.TestCase):
             {"text": "PROVINCIA/PROVINCIA: ALICANTE", "top": 160},
         ]
         path = SimpleNamespace(name="test.pdf", read_bytes=lambda: b"test-source")
+        source = "1 VACANTE\n03000001: CEIP PRUEBA 11,50 horesPRIMARIA\n2 VACANTE\n"
         with patch("offered_positions.pdfplumber.open") as opened, \
              patch("offered_positions.context_lines", return_value=lines), \
+             patch("offered_positions.PdfReader", return_value=SimpleNamespace(
+                 pages=[SimpleNamespace(extract_text=lambda: source)])), \
              patch("offered_positions.extract_slot_id", side_effect=["123456", "123457"]):
             opened.return_value.__enter__.return_value.pages = [page]
             parsed = parse_pdf(path, [], {"03000001": "CEIP PRUEBA"})
         self.assertEqual(parsed["items"][0][11], "ATENDERA CEIP SEGUN NECESIDADES POR DESGLOSE")
         self.assertEqual(parsed["items"][1][11], "Fins al 30/06/2027")
         self.assertEqual(parsed["items"][0][8:11], [11.5, True, False])
+        self.assertEqual(parsed["items"][0][13], "03000001: CEIP PRUEBA 11,50 hores PRIMARIA")
+        self.assertEqual(parsed["items"][1][13], "")
+
+    def test_composition_keeps_overlapping_names_without_footer_or_next_row(self) -> None:
+        source = (
+            "211 SUSTITUCION DETERMINADA\n"
+            "12004205: IES PRIMERO (CASTELLO DE LA PLANA)9,00 horesMATEMATIQUES\n"
+            "12006056: SECCIO DEL IES SEGUNDO (CASTELLO DE LA PLANA)9,00 horesMATEMATIQUES\n"
+            "CASTELLO - 12004205 - IES PRIMERO888165 SI\n"
+            "Pag 32 de 67\n212 VACANTE\n03000001: OTRO CENTRO 18,00 horesMUSICA"
+        )
+        self.assertEqual(source_row_composition(source, "211", ["12004205", "12006056"]),
+            "12004205: IES PRIMERO (CASTELLO DE LA PLANA) 9,00 hores MATEMATIQUES; "
+            "12006056: SECCIO DEL IES SEGUNDO (CASTELLO DE LA PLANA) 9,00 hores MATEMATIQUES")
+        with self.assertRaisesRegex(ValueError, "incompletos"):
+            source_row_composition(source, "211", ["12004205"])
+        with self.assertRaisesRegex(ValueError, "no reconocida"):
+            source_row_composition("1 VACANTE\n03000001: CENTRO SIN HORAS", "1", ["03000001"])
 
     def test_multiline_date_belongs_only_to_its_own_offer(self) -> None:
         chars = []

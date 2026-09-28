@@ -196,15 +196,37 @@ def source_center_name(page_text: str, center_code: str, slot_id: str | None) ->
     return compact_text(match.group(1)) if match else None
 
 
-def source_row_hours(page_text: str, order: str, slot_id: str, observations: str) -> float | None:
-    """Recover hours drawn over a long center name using PDF drawing order."""
+def source_row_record(page_text: str, order: str) -> str:
     match = re.search(rf"^{re.escape(order)}\s+(?:VACANTE|SUSTITUCI.N)", page_text, re.MULTILINE)
     if not match:
-        raise ValueError(f"No se encuentra la fila {order} para verificar sus horas")
-    record = re.split(
+        raise ValueError(f"No se encuentra la fila {order} en el contenido del PDF")
+    return re.split(
         r"\n\d+\s+(?:VACANTE|SUSTITUCI.N)|\n(?:PROVINCIA/|CUERPO/|ESPECIALIDAD/|P.g \d+)",
         page_text[match.start():], maxsplit=1,
     )[0]
+
+
+def source_row_composition(page_text: str, order: str, center_codes: list[str]) -> str:
+    """Use drawing order so overlapping center names and hours stay separate."""
+    details = []
+    found_codes = []
+    for line in source_row_record(page_text, order).splitlines():
+        if not re.match(r"\d{8}:", line):
+            continue
+        match = re.fullmatch(r"(\d{8}):\s*(.+?)\s*(\d{1,2}(?:[,.]\d+)?)\s+hores\s*(.+)", line)
+        if not match:
+            raise ValueError(f"Composicion no reconocida en la fila {order}: {line!r}")
+        code, center, hours, specialty = match.groups()
+        found_codes.append(code)
+        details.append(f"{code}: {compact_text(center)} {hours} hores {compact_text(specialty)}")
+    if found_codes != center_codes:
+        raise ValueError(f"Centros de la composicion incompletos en la fila {order}")
+    return "; ".join(details)
+
+
+def source_row_hours(page_text: str, order: str, slot_id: str, observations: str) -> float | None:
+    """Recover hours drawn over a long center name using PDF drawing order."""
+    record = source_row_record(page_text, order)
     tail = record.split(slot_id, 1)[-1]
     tail = compact_text(re.sub(r"^\s*(?:NO|S[ÍI])", "", tail))
     if observations:
@@ -318,10 +340,27 @@ def parse_pdf(
                 # Notes may span several lines; stop before the next row or heading.
                 boundaries = [float(other["top"]) for other in row_numbers]
                 boundaries.extend(top for top, _ in bodies + page_specialties + provinces)
-                boundaries.extend(
-                    float(word["top"]) for word in words
-                    if re.fullmatch(r"\d{8}:", word["text"])
+                row_bottom = min(
+                    (top - 2.2 for top in boundaries if top > float(row["top"])),
+                    default=float(page.height) - 25,
                 )
+                composition_words = [
+                    word for word in words
+                    if re.fullmatch(r"\d{8}:", word["text"])
+                    and float(row["top"]) < float(word["top"]) < row_bottom
+                ]
+                composition_tops = [float(word["top"]) for word in composition_words]
+                composition = ""
+                if composition_tops:
+                    if source_reader is None:
+                        source_reader = PdfReader(pdf_path)
+                    if source_page_text is None:
+                        source_page_text = source_reader.pages[page_number - 1].extract_text() or ""
+                    composition = source_row_composition(
+                        source_page_text, row["text"],
+                        [word["text"].rstrip(":") for word in composition_words],
+                    )
+                boundaries.extend(composition_tops)
                 notes_bottom = min(
                     (top - 2.2 for top in boundaries if top > float(row["top"])),
                     default=float(page.height) - 25,
@@ -394,7 +433,7 @@ def parse_pdf(
                         itinerant,
                         observations,
                         normalize_placement(placement_raw),
-                        "",
+                        composition,
                         False,
                         publication_date,
                         False,
