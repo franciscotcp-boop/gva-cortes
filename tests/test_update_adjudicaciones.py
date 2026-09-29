@@ -533,6 +533,34 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
         self.assertTrue(resolved[0].english_requirement)
         self.assertIn("295", resolved[0].observations)
 
+    def test_fpa_292_keeps_unique_biology_pool_and_rejects_ambiguity(self) -> None:
+        block = ["58 SIMO VEDRENO, RICARDO Voluntaria",
+                 "767329 MISLATA(46017651)CENTRE PUBLIC FPA",
+                 "292 / FPA CIENTIFIC/TECNOLOGIC",
+                 "Jornada completa SUBSTITUCIO INDETERMINADA Adjudicat"]
+        post = updater.parse_block(block, "secundaria", ("208", "BIOLOGIA I GEOLOGIA"), require_matching_specialty=False)
+        status = updater.parse_status_block(block, "secundaria", ("208", "BIOLOGIA I GEOLOGIA"))
+        headers = {"208": "BIOLOGIA I GEOLOGIA", "219": "TECNOLOGIA"}
+        result = updater.resolve_program_assignments([post], [status], headers)
+        self.assertEqual((result[0].specialty_code, result[0].cut, result[0].post_specialty_code), ("208", 58, "292"))
+        self.assertEqual(result[0].workload, "C")
+        self.assertEqual(result[0].placement_type, "sub_indeterminada")
+        self.assertIn("292 FPA", result[0].observations)
+        with self.assertRaisesRegex(ValueError, "Ambiguous originating pool"):
+            updater.resolve_program_assignments([post], [status, updater.StatusRecord(10, status.candidate_name, "219", "A")], headers)
+
+    def test_september_29_owner_choice_uses_physics_rank(self) -> None:
+        reviews = updater.load_program_reviews("9e8bacd93c1d02f8918f872dddd673db23dada3db9f3f5e66b8ec79e868de741")
+        self.assertEqual(set(reviews), {"875872"})
+        block = ["8 BAGAN SEVILLANO, CARLOS Voluntaria", "875872 CASTELLO(12005738)IES LA PLANA",
+                 "276 / AMBIT CIENTIFIC", "6 horas SUBSTITUCIO INDETERMINADA Adjudicat"]
+        post = updater.parse_block(block, "secundaria", ("219", "TECNOLOGIA"), require_matching_specialty=False)
+        statuses = [updater.StatusRecord(rank, post.candidate_name, code, "A") for code, rank in (("206", 127), ("207", 67), ("219", 8))]
+        result = updater.resolve_program_assignments([post], statuses, {"206": "MATEMATIQUES", "207": "FISICA I QUIMICA", "219": "TECNOLOGIA"}, reviews)
+        self.assertEqual((result[0].specialty_code, result[0].cut, result[0].post_specialty_code), ("207", 67, "276"))
+        self.assertEqual(result[0].workload, 6)
+        self.assertEqual(result[0].observations, reviews["875872"]["observations"])
+
     def test_unknown_cross_specialty_code_is_not_a_program_exception(self) -> None:
         block = [
             "1940 CANOS CABEDO, MARIA DE LA PURIFICACION Voluntaria",

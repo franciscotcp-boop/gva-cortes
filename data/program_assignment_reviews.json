@@ -1,6 +1,21 @@
 {
   "schema_version": 1,
   "documents": {
+    "9e8bacd93c1d02f8918f872dddd673db23dada3db9f3f5e66b8ec79e868de741": {
+      "source_date": "2026-09-29",
+      "source_url": "https://ceice.gva.es/documents/162909733/414354213/260929_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "875872",
+          "candidate_name": "BAGAN SEVILLANO, CARLOS",
+          "center_code": "12005738",
+          "specialty_code": "207",
+          "post_specialty_code": "276",
+          "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
+        }
+      ]
+    },
     "5f523e1e98ecccade21ef8a83bd58cba11997bd01c1cf7e72bb509d420d742bc": {
       "source_date": "2026-09-24",
       "source_url": "https://ceice.gva.es/documents/162909733/414354213/260924_lis_sec.pdf",
