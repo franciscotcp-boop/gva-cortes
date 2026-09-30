@@ -24,6 +24,12 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-t
 - Recover only missing sources together with any genuinely failed/stuck source.
 - Verify that recovery actually ran its requested source steps, not just that
   the overall run was green.
+- Save a small per-run check receipt as a GitHub Actions artifact, including
+  selected modes, outcomes, validation/publication outcomes, run ID, attempt,
+  commit SHA and completion time. If GitHub returns empty job steps, the
+  watchdog uses this verified receipt instead of issuing a false alert. The
+  live test of run #1693 exposed this empty-step API response despite complete
+  logs and successful processing. Receipts never change runtime app datasets.
 - Keep same-day boundaries: Friday difficult offers are never downloaded again
   after midnight; Saturday cleanup can be recovered separately.
 - Schedule the watchdog away from the beginning of each hour. Keep the owner's

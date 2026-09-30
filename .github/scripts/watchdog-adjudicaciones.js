@@ -1,5 +1,7 @@
 "use strict";
 
+const { execFileSync } = require("node:child_process");
+
 const QUEUE_STATUSES = new Set(["queued", "requested", "waiting", "pending"]);
 const ACTIVE_STATUSES = new Set([...QUEUE_STATUSES, "in_progress"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
@@ -16,6 +18,7 @@ const SOURCE_STEPS = {
   "Actualizar puestos de difícil cobertura": "dificil",
   "Retirar difícil cobertura caducada": "limpieza_puestos",
 };
+const SOURCE_MODES = new Set(["inicio", "curso", ...Object.values(SOURCE_STEPS)]);
 
 function envBoolean(value) {
   return /^(1|true|yes|si)$/i.test(String(value || ""));
@@ -247,6 +250,37 @@ function sourceModeForStep(stepName, run) {
   return requested ? requested[1] : ([7, 8].includes(month) ? "inicio" : "curso");
 }
 
+function validateRunReceipt(receipt, run) {
+  return receipt && receipt.schema_version === 1 &&
+    receipt.run_id === run.id && receipt.run_attempt === (run.run_attempt || 1) &&
+    receipt.head_sha === run.head_sha && Number.isFinite(Date.parse(receipt.checked_at)) &&
+    Array.isArray(receipt.modes) && receipt.modes.length > 0 &&
+    receipt.modes.every(mode => SOURCE_MODES.has(mode)) &&
+    receipt.source_outcomes && typeof receipt.source_outcomes === "object";
+}
+
+function decodeReceiptArchive(bytes) {
+  return JSON.parse(execFileSync(process.env.PYTHON_EXECUTABLE || "python3",
+    ["scripts/automation_receipt.py", "--read-archive"],
+    { input: Buffer.from(bytes), encoding: "utf8", maxBuffer: 1024 * 1024 }));
+}
+
+async function readRunReceipt(github, owner, repo, run, decode = decodeReceiptArchive) {
+  const response = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: run.id, per_page: 100 });
+  const name = `automation-check-${run.id}-${run.run_attempt || 1}`;
+  const artifact = (response.data.artifacts || []).find(item => item.name === name && !item.expired);
+  if (!artifact) return null;
+  const archive = await github.rest.actions.downloadArtifact({ owner, repo, artifact_id: artifact.id, archive_format: "zip" });
+  const receipt = decode(archive.data);
+  if (!validateRunReceipt(receipt, run)) throw new Error(`Comprobante no valido para #${run.run_number || run.id}`);
+  return receipt;
+}
+
+function receiptSuccessfulModes(receipt) {
+  if (!receipt || receipt.validation_outcome !== "success" || receipt.publication_outcome !== "success") return [];
+  return receipt.modes.filter(mode => receipt.source_outcomes[mode] === "success");
+}
+
 async function missedScheduledChecks(github, owner, repo, runs, checks, now) {
   const pending = new Map(checks.map(check => [check.mode, check]));
   if (!pending.size) return [];
@@ -255,6 +289,14 @@ async function missedScheduledChecks(github, owner, repo, runs, checks, now) {
     if (run.status !== "completed" || run.conclusion !== "success") continue;
     if (Date.parse(run.updated_at || run.created_at) < earliest) continue;
     const response = await github.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: run.id, per_page: 100 });
+    if (!(response.data.jobs || []).some(job => (job.steps || []).length)) {
+      const receipt = await readRunReceipt(github, owner, repo, run);
+      for (const mode of receiptSuccessfulModes(receipt)) {
+        const check = pending.get(mode);
+        const checked = Date.parse(receipt.checked_at);
+        if (check && checked >= Date.parse(check.scheduledAt) && checked <= now.getTime()) pending.delete(mode);
+      }
+    }
     for (const job of response.data.jobs || []) {
       if (job.conclusion !== "success") continue;
       for (const step of job.steps || []) {
@@ -274,6 +316,9 @@ async function missedScheduledChecks(github, owner, repo, runs, checks, now) {
 
 async function successfulSourceModes(github, owner, repo, run) {
   const response = await github.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: run.id, per_page: 100 });
+  if (!(response.data.jobs || []).some(job => (job.steps || []).length)) {
+    return new Set(receiptSuccessfulModes(await readRunReceipt(github, owner, repo, run)));
+  }
   return new Set((response.data.jobs || []).flatMap(job => (job.steps || [])
     .filter(step => step.conclusion === "success")
     .flatMap(step => {
@@ -287,6 +332,10 @@ async function recoveryModesForRun(github, owner, repo, run, now) {
     const response = await github.rest.actions.listJobsForWorkflowRun({
       owner, repo, run_id: run.id, per_page: 100,
     });
+    if (!(response.data.jobs || []).some(job => (job.steps || []).length)) {
+      const receipt = await readRunReceipt(github, owner, repo, run);
+      if (receipt) return receipt.modes;
+    }
     const attempted = new Set((response.data.jobs || []).flatMap(job =>
       (job.steps || []).filter(step => step.conclusion !== "skipped").map(step => step.name)
     ));
@@ -667,6 +716,9 @@ module.exports._test = {
   generatedAtHealth,
   madridCalendar,
   missedScheduledChecks,
+  readRunReceipt,
+  receiptSuccessfulModes,
+  validateRunReceipt,
   positiveNumber,
   recoveryModesForRun,
   runAgeMinutes,

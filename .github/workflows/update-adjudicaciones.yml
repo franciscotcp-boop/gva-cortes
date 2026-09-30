@@ -213,6 +213,7 @@ jobs:
         run: python scripts/validate_runtime_data.py
 
       - name: Guardar solamente datos validados
+        id: publication
         if: >-
           always() &&
           steps.calendar.outputs.run == 'true' &&
@@ -234,6 +235,29 @@ jobs:
             git commit -m "Actualizar datos de AdjudicApp"
             git push
           fi
+
+      - name: Registrar las fuentes comprobadas
+        if: always() && steps.calendar.outputs.run == 'true'
+        env:
+          RESULT_INICIO: ${{ steps.adjudicaciones.outcome }}
+          RESULT_CURSO: ${{ steps.adjudicaciones.outcome }}
+          RESULT_POSICIONES: ${{ steps.posiciones.outcome }}
+          RESULT_ACREDITACIONES: ${{ steps.acreditaciones.outcome }}
+          RESULT_PUESTOS: ${{ steps.puestos.outcome }}
+          RESULT_DIFICIL: ${{ steps.dificil.outcome }}
+          RESULT_LIMPIEZA_PUESTOS: ${{ steps.limpieza_puestos.outcome }}
+          RESULT_VALIDATION: ${{ steps.output_validation.outcome }}
+          RESULT_PUBLICATION: ${{ steps.publication.outcome }}
+        run: python scripts/automation_receipt.py --modes "${{ steps.calendar.outputs.modes }}"
+
+      - name: Conservar comprobante para el vigilante
+        if: always() && steps.calendar.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-check-${{ github.run_id }}-${{ github.run_attempt }}
+          path: automation-check.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Comunicar fallos de las fuentes al vigilante
         if: >-

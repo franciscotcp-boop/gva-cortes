@@ -11,6 +11,9 @@ const {
   consecutiveFailureRuns,
   generatedAtHealth,
   missedScheduledChecks,
+  readRunReceipt,
+  receiptSuccessfulModes,
+  validateRunReceipt,
   recoveryModesForRun,
   shouldMonitor,
   staleRunReason,
@@ -478,4 +481,33 @@ test("no confirma una recuperacion verde que omitio la fuente pendiente", async 
   const result = await runWatchdog({ github, context: context(), core: fakeCore(), now });
   assert.equal(result.recoverySucceeded, false);
   assert.match(calls.issues[0].body, /No se han comprobado correctamente todas las fuentes pendientes/);
+});
+
+test("el comprobante debe pertenecer a la ejecucion, intento y codigo exactos", () => {
+  const run = { id: 17, run_attempt: 2, head_sha: "abc" };
+  const receipt = { schema_version: 1, run_id: 17, run_attempt: 2, head_sha: "abc",
+    checked_at: "2026-09-30T12:10:00Z", modes: ["puestos"], source_outcomes: { puestos: "success" },
+    validation_outcome: "success", publication_outcome: "success" };
+  assert.equal(validateRunReceipt(receipt, run), true);
+  assert.equal(validateRunReceipt({ ...receipt, run_attempt: 1 }, run), false);
+  assert.equal(validateRunReceipt({ ...receipt, head_sha: "other" }, run), false);
+  assert.equal(validateRunReceipt({ ...receipt, modes: ["unknown"] }, run), false);
+  assert.deepEqual(receiptSuccessfulModes(receipt), ["puestos"]);
+  assert.deepEqual(receiptSuccessfulModes({ ...receipt, publication_outcome: "failure" }), []);
+  assert.deepEqual(receiptSuccessfulModes({ ...receipt, source_outcomes: { puestos: "skipped" } }), []);
+});
+
+test("lee el comprobante propio cuando GitHub omite los pasos de los jobs", async () => {
+  const run = { id: 17, run_attempt: 2, head_sha: "abc" };
+  const receipt = { schema_version: 1, run_id: 17, run_attempt: 2, head_sha: "abc",
+    checked_at: "2026-09-30T12:10:00Z", modes: ["puestos"], source_outcomes: { puestos: "success" } };
+  const github = { rest: { actions: {
+    listWorkflowRunArtifacts: async () => ({ data: { artifacts: [
+      { id: 1, name: "automation-check-17-1" },
+      { id: 2, name: "automation-check-17-2", expired: false },
+    ] } }),
+    downloadArtifact: async args => { assert.equal(args.artifact_id, 2); return { data: Buffer.from("archive") }; },
+  } } };
+  assert.deepEqual(await readRunReceipt(github, "owner", "repo", run, () => receipt), receipt);
+  await assert.rejects(readRunReceipt(github, "owner", "repo", run, () => ({ ...receipt, run_id: 16 })), /Comprobante no valido/);
 });
