@@ -43,3 +43,24 @@ targeted recovery and false-green recovery rejection.
 This remains GitHub-only automation. If GitHub delays both scheduled workflows
 or Conselleria is unavailable, immediate publication cannot be guaranteed.
 The change fixes missing-turn detection; it cannot control external services.
+
+## Live verification
+
+- Manual source check #1694 downloaded the official current PDF, confirmed all
+  632 offers and left the already published snapshot unchanged.
+- Scheduled source check #1695 also completed successfully for `puestos`,
+  with all 161 Python tests and runtime validation passing. Both checks saved
+  their exact run/attempt receipts without creating another data commit.
+- Watchdog #994 used the successful check to close incident #11 automatically;
+  watchdog #995 confirmed there were no source checks pending. All 23 Node
+  watchdog tests passed in both runs, including the empty-step receipt path.
+- Live URLs for all three runtime datasets matched the local publication.
+  The existing embedded CodePen displayed the October 1 offers, including
+  41 Audicion y Lenguaje posts and the preserved center/observation labels.
+- No CodePen source, Android binary, cut, personal profile or accreditation
+  dataset was changed for this publication. The Android event detector produced
+  only the new ordinary continuous-offers event, not duplicate result events.
+
+Verification runs:
+https://github.com/franciscotcp-boop/gva-cortes/actions/runs/36722649456
+https://github.com/franciscotcp-boop/gva-cortes/actions/runs/36722794549
