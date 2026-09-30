@@ -7,8 +7,10 @@ const runWatchdog = require("./watchdog-adjudicaciones.js");
 const {
   buildIncidentReport,
   calendarModes,
+  dueScheduledChecks,
   consecutiveFailureRuns,
   generatedAtHealth,
+  missedScheduledChecks,
   recoveryModesForRun,
   shouldMonitor,
   staleRunReason,
@@ -240,7 +242,7 @@ test("simula cancelacion, relanzamiento y recuperacion correcta", async () => {
   const core = fakeCore();
   const manualContext = context();
   manualContext.eventName = "workflow_dispatch";
-  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {} });
+  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {}, auditSchedule: false });
 
   assert.equal(result.action, "recovery");
   assert.equal(result.recoverySucceeded, true);
@@ -266,7 +268,7 @@ test("simula una recuperacion fallida y deja una alerta abierta", async () => {
   const core = fakeCore();
   const manualContext = context();
   manualContext.eventName = "workflow_dispatch";
-  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {} });
+  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {}, auditSchedule: false });
 
   assert.equal(result.recoverySucceeded, false);
   assert.equal(calls.cancel.length, 1);
@@ -298,7 +300,7 @@ test("el evento de finalizacion activa la recuperacion fuera del calendario", as
   const eventContext = context();
   eventContext.eventName = "workflow_run";
   const result = await runWatchdog({
-    github, context: eventContext, core: fakeCore(), now, sleepFn: async () => {},
+    github, context: eventContext, core: fakeCore(), now, sleepFn: async () => {}, auditSchedule: false,
   });
   assert.equal(result.recoverySucceeded, true);
   assert.equal(calls.dispatch[0].inputs.recovery_modes, "puestos");
@@ -367,7 +369,7 @@ test("espera si tras un fallo ya hay una ejecucion reciente en marcha", async ()
     },
   };
   const core = fakeCore();
-  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {} });
+  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {}, auditSchedule: false });
 
   assert.equal(result.action, "healthy_run_in_progress");
   assert.equal(calls.cancel.length, 0);
@@ -409,7 +411,7 @@ test("confirma por correo una recuperacion que termino despues del primer aviso"
   const core = fakeCore();
   const manualContext = context();
   manualContext.eventName = "workflow_dispatch";
-  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {} });
+  const result = await runWatchdog({ github, context: manualContext, core, now, sleepFn: async () => {}, auditSchedule: false });
 
   assert.equal(result.action, "recovered_after_alert");
   assert.equal(calls.comments.length, 1);
@@ -417,4 +419,63 @@ test("confirma por correo una recuperacion que termino despues del primer aviso"
   assert.equal(calls.issueUpdates.length, 1);
   assert.equal(calls.issueUpdates[0].state, "closed");
   assert.equal(core.records.outputs.recovery_succeeded, "true");
+});
+
+test("detecta el turno omitido aunque el vigilante llegue fuera de su hora", () => {
+  const now = new Date("2026-09-30T12:10:00Z");
+  assert.deepEqual(calendarModes(now), []);
+  assert.equal(shouldMonitor(now), true);
+  assert.deepEqual(dueScheduledChecks(now), [{ mode: "puestos", scheduledAt: "2026-09-30T11:07:00.000Z" }]);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-09-30T07:30:00Z")), []);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-09-30T07:37:00Z")), [{ mode: "puestos", scheduledAt: "2026-09-30T07:07:00.000Z" }]);
+});
+
+test("los turnos pendientes respetan Madrid en invierno y no arrastran dificil cobertura al sabado", () => {
+  assert.deepEqual(dueScheduledChecks(new Date("2026-10-28T09:10:00Z")), [{ mode: "puestos", scheduledAt: "2026-10-28T08:07:00.000Z" }]);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-09-26T22:30:00Z")), []);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-09-25T23:00:00Z")), [{ mode: "limpieza_puestos", scheduledAt: "2026-09-25T22:20:00.000Z" }]);
+});
+
+test("un JSON reciente o una ejecucion de otra fuente no ocultan puestos sin revisar", async () => {
+  const now = new Date("2026-09-30T12:10:00Z");
+  const checks = dueScheduledChecks(now);
+  const run = { id: 1, status: "completed", conclusion: "success", created_at: "2026-09-30T11:20:00Z" };
+  let steps = [{ name: "Actualizar cortes de adjudicaciones", conclusion: "success", started_at: "2026-09-30T11:21:00Z" }];
+  const github = { rest: { actions: { listJobsForWorkflowRun: async () => ({ data: { jobs: [{ conclusion: "success", steps }] } }) } } };
+  assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [run], checks, now), checks);
+  steps = [{ name: "Actualizar puestos ofertados", conclusion: "skipped", started_at: "2026-09-30T11:21:00Z" }];
+  assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [run], checks, now), checks);
+  steps[0].conclusion = "success";
+  assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [run], checks, now), []);
+  assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [{ ...run, conclusion: "failure" }], checks, now), checks);
+  steps[0].started_at = "2026-09-30T10:00:00Z";
+  assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [run], checks, now), checks);
+});
+
+test("recupera una fuente omitida sin cancelar ni repetir otras fuentes", async () => {
+  setWatchdogEnv();
+  const now = new Date("2026-09-30T12:10:00Z");
+  const { github, calls } = recoveryGithub(now);
+  const replacement = { id: 900, created_at: new Date().toISOString(), event: "workflow_dispatch", status: "queued" };
+  let scans = 0;
+  github.rest.actions.listWorkflowRuns = async () => ({ data: { workflow_runs: ++scans < 3 ? [] : [replacement] } });
+  const result = await runWatchdog({ github, context: context(), core: fakeCore(), now });
+  assert.equal(result.recoverySucceeded, true);
+  assert.equal(calls.cancel.length, 0);
+  assert.equal(calls.dispatch.length, 1);
+  assert.equal(calls.dispatch[0].inputs.recovery_modes, "puestos");
+  assert.match(calls.issues[0].body, /Turnos sin comprobacion confirmada/);
+});
+
+test("no confirma una recuperacion verde que omitio la fuente pendiente", async () => {
+  setWatchdogEnv();
+  const now = new Date("2026-09-30T12:10:00Z");
+  const { github, calls } = recoveryGithub(now);
+  const replacement = { id: 900, created_at: new Date().toISOString(), event: "workflow_dispatch", status: "queued" };
+  let scans = 0;
+  github.rest.actions.listWorkflowRuns = async () => ({ data: { workflow_runs: ++scans < 3 ? [] : [replacement] } });
+  github.rest.actions.listJobsForWorkflowRun = async () => ({ data: { jobs: [{ steps: [{ name: "Actualizar puestos ofertados", conclusion: "skipped" }] }] } });
+  const result = await runWatchdog({ github, context: context(), core: fakeCore(), now });
+  assert.equal(result.recoverySucceeded, false);
+  assert.match(calls.issues[0].body, /No se han comprobado correctamente todas las fuentes pendientes/);
 });

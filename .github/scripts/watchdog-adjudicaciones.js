@@ -9,6 +9,13 @@ const POSITION_HOURS = new Set([9, 11, 13, 15, 17, 19]);
 const ACCREDITATION_HOURS = new Set([12, 14, 16, 18, 20]);
 const OFFER_HOURS = new Set([9, 11, 13, 15, 17, 19, 20]);
 const DIFFICULT_HOURS = new Set([9, 11, 13, 15, 17, 19, 21, 23]);
+const SOURCE_STEPS = {
+  "Actualizar posiciones anuales": "posiciones",
+  "Actualizar acreditaciones de ingles": "acreditaciones",
+  "Actualizar puestos ofertados": "puestos",
+  "Actualizar puestos de difícil cobertura": "dificil",
+  "Retirar difícil cobertura caducada": "limpieza_puestos",
+};
 
 function envBoolean(value) {
   return /^(1|true|yes|si)$/i.test(String(value || ""));
@@ -28,18 +35,22 @@ function ageMinutes(value, now = new Date()) {
 function madridCalendar(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/Madrid",
+    year: "numeric",
     month: "numeric",
     day: "numeric",
     weekday: "short",
     hour: "numeric",
+    minute: "numeric",
     hourCycle: "h23",
   }).formatToParts(now);
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
   return {
+    year: Number(values.year),
     month: Number(values.month),
     day: Number(values.day),
     weekday: values.weekday,
     hour: Number(values.hour),
+    minute: Number(values.minute),
   };
 }
 
@@ -57,9 +68,28 @@ function calendarModes(now = new Date()) {
   return modes;
 }
 
+function dueScheduledChecks(now = new Date(), graceMinutes = 30, lookbackMinutes = 180) {
+  const due = new Map();
+  const today = madridCalendar(now);
+  const first = Math.ceil((now.getTime() - lookbackMinutes * 60000) / 60000) * 60000;
+  const last = now.getTime() - graceMinutes * 60000;
+  // Use the scheduled instant, not the watchdog's start hour: cron can arrive late.
+  for (let instant = first; instant <= last; instant += 60000) {
+    const value = new Date(instant);
+    const calendar = madridCalendar(value);
+    if (calendar.year !== today.year || calendar.month !== today.month || calendar.day !== today.day) continue;
+    for (const mode of calendarModes(value)) {
+      if (calendar.minute === (mode === "puestos" ? 7 : 20)) {
+        due.set(mode, { mode, scheduledAt: value.toISOString() });
+      }
+    }
+  }
+  return [...due.values()];
+}
+
 function shouldMonitor(now = new Date(), eventName = "schedule") {
   if (eventName !== "schedule") return true;
-  return calendarModes(now).length > 0;
+  return calendarModes(now).length > 0 || dueScheduledChecks(now).length > 0;
 }
 
 function runAgeMinutes(run, now = new Date()) {
@@ -127,6 +157,7 @@ function buildIncidentReport({
   generatedBefore,
   generatedAfter,
   failedRuns = [],
+  missedChecks = [],
   recoveryRun,
   recoveryStarted,
   recoverySucceeded,
@@ -158,6 +189,11 @@ function buildIncidentReport({
     "",
     "### Fallos consecutivos",
     failures,
+    "",
+    "### Turnos sin comprobacion confirmada",
+    missedChecks.length
+      ? missedChecks.map(check => `- ${check.mode}: ${madridTimestamp(new Date(check.scheduledAt))}`).join("\n")
+      : "- No se detectaron turnos omitidos.",
     "",
     "### Nueva ejecucion",
     recoveryStarted
@@ -204,6 +240,48 @@ async function listPrimaryRuns(github, owner, repo, workflowId) {
   return response.data.workflow_runs || [];
 }
 
+function sourceModeForStep(stepName, run) {
+  if (stepName !== "Actualizar cortes de adjudicaciones") return SOURCE_STEPS[stepName] || "";
+  const requested = String(run.display_title || run.name || "").match(/·\s*(inicio|curso|all)\)/);
+  const month = madridCalendar(new Date(run.created_at)).month;
+  return requested ? requested[1] : ([7, 8].includes(month) ? "inicio" : "curso");
+}
+
+async function missedScheduledChecks(github, owner, repo, runs, checks, now) {
+  const pending = new Map(checks.map(check => [check.mode, check]));
+  if (!pending.size) return [];
+  const earliest = Math.min(...checks.map(check => Date.parse(check.scheduledAt)));
+  for (const run of sortNewest(runs)) {
+    if (run.status !== "completed" || run.conclusion !== "success") continue;
+    if (Date.parse(run.updated_at || run.created_at) < earliest) continue;
+    const response = await github.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: run.id, per_page: 100 });
+    for (const job of response.data.jobs || []) {
+      if (job.conclusion !== "success") continue;
+      for (const step of job.steps || []) {
+        if (step.conclusion !== "success") continue;
+        const mode = sourceModeForStep(step.name, run);
+        for (const key of mode === "all" ? ["inicio", "curso"] : [mode]) {
+          const check = pending.get(key);
+          const started = Date.parse(step.started_at);
+          if (check && started >= Date.parse(check.scheduledAt) && started <= now.getTime()) pending.delete(key);
+        }
+      }
+    }
+    if (!pending.size) break;
+  }
+  return [...pending.values()];
+}
+
+async function successfulSourceModes(github, owner, repo, run) {
+  const response = await github.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: run.id, per_page: 100 });
+  return new Set((response.data.jobs || []).flatMap(job => (job.steps || [])
+    .filter(step => step.conclusion === "success")
+    .flatMap(step => {
+      const mode = sourceModeForStep(step.name, run);
+      return mode === "all" ? ["inicio", "curso"] : (mode ? [mode] : []);
+    })));
+}
+
 async function recoveryModesForRun(github, owner, repo, run, now) {
   if (run) {
     const response = await github.rest.actions.listJobsForWorkflowRun({
@@ -219,14 +297,7 @@ async function recoveryModesForRun(github, owner, repo, run, now) {
       const mode = requested ? requested[1] : ([7, 8].includes(month) ? "inicio" : "curso");
       modes.push(...(mode === "all" ? ["inicio", "curso"] : [mode]));
     }
-    const steps = {
-      "Actualizar posiciones anuales": "posiciones",
-      "Actualizar acreditaciones de ingles": "acreditaciones",
-      "Actualizar puestos ofertados": "puestos",
-      "Actualizar puestos de difícil cobertura": "dificil",
-      "Retirar difícil cobertura caducada": "limpieza_puestos",
-    };
-    for (const [step, mode] of Object.entries(steps)) {
+    for (const [step, mode] of Object.entries(SOURCE_STEPS)) {
       if (attempted.has(step)) modes.push(mode);
     }
     if (modes.length) return modes;
@@ -362,7 +433,7 @@ async function sendTestAlert(github, owner, repo) {
   return created.data.html_url;
 }
 
-async function runWatchdog({ github, context, core, now = new Date(), sleepFn = sleep }) {
+async function runWatchdog({ github, context, core, now = new Date(), sleepFn = sleep, auditSchedule = true }) {
   const { owner, repo } = context.repo;
   const workflowId = process.env.PRIMARY_WORKFLOW || "update-adjudicaciones.yml";
   const dataPath = process.env.DATA_PATH || "data/adjudicaciones.json";
@@ -375,6 +446,8 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   const recoveryWaitMinutes = positiveNumber(process.env.RECOVERY_WAIT_MINUTES, 8);
   const dryRun = envBoolean(process.env.DRY_RUN);
   const testAlert = envBoolean(process.env.TEST_ALERT);
+  const graceMinutes = positiveNumber(process.env.SCHEDULE_GRACE_MINUTES, 30);
+  const lookbackMinutes = positiveNumber(process.env.SCHEDULE_LOOKBACK_MINUTES, 180);
 
   if (testAlert) {
     const issueUrl = await sendTestAlert(github, owner, repo);
@@ -402,6 +475,8 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   const generatedBefore = generatedAtHealth(metadataBefore.generatedAt, now, dataMaxAgeMinutes);
 
   const runs = await listPrimaryRuns(github, owner, repo, workflowId);
+  const expectedChecks = auditSchedule ? dueScheduledChecks(now, graceMinutes, lookbackMinutes) : [];
+  const missedChecks = await missedScheduledChecks(github, owner, repo, runs, expectedChecks, now);
   const activeRuns = sortNewest(runs.filter(run => ACTIVE_STATUSES.has(run.status)));
   const staleRuns = activeRuns.filter(run => staleRunReason(run, now, staleMinutes));
   const healthyRuns = activeRuns.filter(run => !staleRunReason(run, now, staleMinutes));
@@ -411,9 +486,11 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   core.info(`generated_at: ${metadataBefore.generatedAt || "no disponible"}`);
   core.info(`Ejecuciones activas: ${activeRuns.length}; bloqueadas: ${staleRuns.length}`);
   core.info(`Fallos consecutivos: ${failedRuns.length}; umbral: ${failureThreshold}`);
+  core.info(`Turnos sin comprobacion confirmada: ${missedChecks.map(check => check.mode).join(",") || "ninguno"}`);
+  core.setOutput("missing_modes", missedChecks.map(check => check.mode).join(","));
   core.info(`Limites: ejecucion ${staleMinutes} min; JSON ${dataMaxAgeMinutes} min`);
 
-  const needsRecovery = staleRuns.length > 0 || repeatedFailures || Boolean(metadataError);
+  const needsRecovery = staleRuns.length > 0 || repeatedFailures || Boolean(metadataError) || missedChecks.length > 0;
   if (!needsRecovery) {
     if (!dryRun) {
       const resolvedUrl = await resolveRecoveredIncident(
@@ -442,6 +519,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
       staleRuns: staleRuns.length,
       generatedAtStale: generatedBefore.stale,
       consecutiveFailures: failedRuns.length,
+      missedChecks,
     };
   }
 
@@ -492,10 +570,12 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     ACTIVE_STATUSES.has(run.status) && !staleRunReason(run, new Date(), staleMinutes)
   ))[0] || null;
   let recoveryStarted = Boolean(recoveryRun);
+  let recoveryModes = missedChecks.map(check => check.mode);
 
   if (!recoveryRun) {
-    const sourceRun = staleRuns[0] || failedRuns[0] || context.payload.workflow_run;
-    const recoveryModes = await recoveryModesForRun(github, owner, repo, sourceRun, now);
+    const sourceRun = staleRuns[0] || failedRuns[0] || (metadataError ? context.payload.workflow_run : null);
+    const originalModes = sourceRun ? await recoveryModesForRun(github, owner, repo, sourceRun, now) : [];
+    recoveryModes = [...new Set([...originalModes, ...recoveryModes])];
     if (!recoveryModes.length) {
       core.warning("No se ha podido identificar la fuente a recuperar; se conserva la incidencia sin anunciar una recuperacion vacia.");
       return { action: "unknown_recovery_modes" };
@@ -534,7 +614,9 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   );
 
   const runSucceeded = Boolean(finalRun && finalRun.status === "completed" && finalRun.conclusion === "success");
-  const recoverySucceeded = runSucceeded && !metadataAfterError;
+  const completedModes = runSucceeded ? await successfulSourceModes(github, owner, repo, finalRun) : new Set();
+  const sourcesChecked = recoveryModes.every(mode => completedModes.has(mode));
+  const recoverySucceeded = runSucceeded && sourcesChecked && !metadataAfterError;
   const recoveryMessage = recoverySucceeded
     ? "La nueva comprobacion termino correctamente; si no habia documentos nuevos, generated_at puede permanecer sin cambios."
     : [
@@ -544,6 +626,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
         metadataAfterError
           ? `No se pudo comprobar el JSON: ${metadataAfterError}.`
           : `generated_at ${generatedAfter.stale ? "permanece antiguo" : "esta actualizado"}.`,
+        sourcesChecked ? "" : "No se han comprobado correctamente todas las fuentes pendientes.",
       ].join(" ");
 
   const report = buildIncidentReport({
@@ -553,6 +636,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     generatedBefore,
     generatedAfter,
     failedRuns,
+    missedChecks,
     recoveryRun: finalRun || recoveryRun,
     recoveryStarted,
     recoverySucceeded,
@@ -577,10 +661,12 @@ module.exports._test = {
   ageMinutes,
   buildIncidentReport,
   calendarModes,
+  dueScheduledChecks,
   consecutiveFailureRuns,
   envBoolean,
   generatedAtHealth,
   madridCalendar,
+  missedScheduledChecks,
   positiveNumber,
   recoveryModesForRun,
   runAgeMinutes,
