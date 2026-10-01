@@ -520,6 +520,77 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
             with self.assertRaisesRegex(ValueError, "Duplicate reviewed"):
                 updater.load_program_reviews("sha", path)
 
+    def test_confirmed_program_decisions_reuse_current_ranks_not_old_positions(self) -> None:
+        preferences = updater.load_confirmed_program_preferences("2026-10-06")
+        decisions = updater.load_program_reviews("9c37583538315ed02524236e269ae69bdfa4649b5263b453d2ca63db13f80ee7")
+        for slot, review in decisions.items():
+            with self.subTest(slot=slot):
+                name = review["candidate_name"]
+                block = [f"999 {name} Voluntaria", f"{slot} LOCALIDAD({review['center_code']})IES PRUEBA",
+                         f"{review['post_specialty_code']} / PROGRAMA", "6 horas SUBSTITUCIO INDETERMINADA Adjudicat"]
+                post = updater.parse_block(block, "secundaria", ("211", "ANGLES"), require_matching_specialty=False)
+                code = review["specialty_code"]
+                statuses = [updater.StatusRecord(22, name, code, "A"), updater.StatusRecord(77, name, "211", "A")]
+                headers = {code: "BOLSA CONFIRMADA", "211": "ANGLES"}
+                result = updater.resolve_program_assignments([post], statuses, headers, confirmed_preferences=preferences)
+                self.assertEqual((result[0].specialty_code, result[0].cut), (code, 22))
+                self.assertEqual(result[0].post_specialty_code, review["post_specialty_code"])
+                self.assertEqual(result[0].observations, review["observations"])
+                for field, value in (("candidate_name", "OTRA, PERSONA"), ("center_code", "99999999"), ("slot_id", "999999")):
+                    other = updater.replace(post, **{field: value})
+                    other_statuses = [updater.replace(status, candidate_name=other.candidate_name) for status in statuses]
+                    with self.assertRaisesRegex(ValueError, "Ambiguous originating pool"):
+                        updater.resolve_program_assignments([other], other_statuses, headers, confirmed_preferences=preferences)
+
+    def test_program_preferences_require_owner_confirmation_same_year_and_no_conflict(self) -> None:
+        entry = {"slot_id": "841479", "candidate_name": "VICEDO DURA, GUILLERMO",
+                 "center_code": "03012980", "specialty_code": "256", "post_specialty_code": "297", "observations": "297 FPA"}
+        doc = {"source_date": "2026-10-01", "reviewed_by": "project_owner", "assignments": [entry]}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "reviews.json"
+            def load(documents, date="2026-10-06"):
+                path.write_text(json.dumps({"documents": documents}), encoding="utf8")
+                return updater.load_confirmed_program_preferences(date, path)
+            key = updater.program_preference_key(entry)
+            self.assertIn(key, load({"old": doc}))
+            self.assertEqual(load({"old": doc}, "2026-09-29"), {})
+            self.assertEqual(load({"old": doc}, "2027-10-06"), {})
+            self.assertEqual(load({"old": doc}, None), {})
+            self.assertEqual(load({"old": {**doc, "reviewed_by": "unconfirmed"}}), {})
+            self.assertEqual(load({"old": doc, "new": {**doc, "assignments": [{**entry, "specialty_code": "211"}]}}), {})
+            self.assertEqual(key, updater.program_preference_key({**entry, "candidate_name": "Vicedo Dur\u00e1, Guillermo"}))
+
+    def test_a_stale_program_preference_cannot_override_current_pdf_evidence(self) -> None:
+        block = ["7 VICEDO DURA, GUILLERMO Voluntaria", "841479 NOVELDA(03012980)CENTRE FPA",
+                 "297 / FPA COMUNICACIO", "6 horas SUBSTITUCIO DETERMINADA Adjudicat"]
+        post = updater.parse_block(block, "secundaria", ("211", "ANGLES"), require_matching_specialty=False)
+        preferences = updater.load_confirmed_program_preferences("2026-10-06")
+        status = updater.StatusRecord(7, post.candidate_name, "211", "A")
+        result = updater.resolve_program_assignments([post], [status], {"211": "ANGLES"}, confirmed_preferences=preferences)
+        self.assertEqual((result[0].specialty_code, result[0].cut), ("211", 7))
+        with self.assertRaisesRegex(ValueError, "Ambiguous originating pool"):
+            updater.resolve_program_assignments([post], [status, updater.StatusRecord(8, post.candidate_name, "204", "A")],
+                                                {"211": "ANGLES", "204": "CASTELLANO"}, confirmed_preferences=preferences)
+
+    def test_ambiguous_programs_produce_a_structured_report_without_guessing(self) -> None:
+        block = ["7 VICEDO DURA, GUILLERMO Voluntaria", "841479 NOVELDA(03012980)CENTRE FPA",
+                 "297 / FPA COMUNICACIO", "6 horas SUBSTITUCIO DETERMINADA Adjudicat"]
+        post = updater.parse_block(block, "secundaria", ("211", "ANGLES"), require_matching_specialty=False)
+        statuses = [updater.StatusRecord(rank, post.candidate_name, code, "A") for code, rank in (("211", 7), ("256", 230))]
+        with self.assertRaises(updater.ProgramReviewRequired) as caught:
+            updater.resolve_program_assignments([post], statuses, {"211": "ANGLES", "256": "VALENCIA"})
+        cases = caught.exception.cases
+        self.assertEqual(cases[0]["slot_id"], "841479")
+        self.assertEqual(cases[0]["candidate_pools"], [{"specialty_code": "211", "position": 7}, {"specialty_code": "256", "position": 230}])
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "pending.json"
+            with patch.dict(updater.os.environ, {"GITHUB_RUN_ID": "17", "GITHUB_RUN_ATTEMPT": "2"}):
+                updater.save_program_review_report(cases, path)
+            report = json.loads(path.read_text(encoding="utf8"))
+            self.assertEqual(report["run_id"], "17")
+            self.assertEqual(report["run_attempt"], "2")
+            self.assertEqual(report["cases"], cases)
+
     def test_fpa_295_uses_unique_english_pool_and_keeps_its_requirement(self) -> None:
         block = ["57 HERNANDEZ BERTO, ANA Voluntaria",
                  "769157 ALACANT(03012891)CENTRE PUBLIC FPA PROFESOR ALBERTO BARRIOS",
@@ -1207,6 +1278,31 @@ class DuplicatePdfTests(unittest.TestCase):
 
 
 class IncompletePublicationTests(unittest.TestCase):
+    def test_failed_program_review_is_reported_before_any_publication(self) -> None:
+        case = {"slot_id": "841479", "candidate_name": "VICEDO DURA, GUILLERMO",
+                "center_code": "03012980", "post_specialty_code": "297",
+                "candidate_pools": [{"specialty_code": "211", "position": 7},
+                                    {"specialty_code": "256", "position": 230}]}
+        url = "https://example.test/261001_lis_sec.pdf"
+        content = b"pdf"
+        data = json.loads(json.dumps(updater.DEFAULT_DATA))
+        before = json.loads(json.dumps(data))
+        context = MagicMock()
+        with patch.object(updater, "extract_pdf_links", return_value=[{"url": url, "text": "Secundaria"}]), \
+             patch.object(updater, "http_get", return_value=content), \
+             patch.object(updater, "parse_pdf", side_effect=updater.ProgramReviewRequired([case])), \
+             patch.object(updater, "save_program_review_report") as report, \
+             patch.object(updater, "apply_curso") as apply_course, \
+             patch.object(updater, "reconcile_after_adjudication") as reconcile:
+            with self.assertRaisesRegex(RuntimeError, "Actualizacion incompleta"):
+                updater.run_mode(data, "curso", {}, "2026-2027", context)
+        report.assert_called_once_with([{**case, "source_url": url,
+                                        "pdf_sha256": updater.hashlib.sha256(content).hexdigest()}])
+        self.assertEqual(data, before)
+        apply_course.assert_not_called()
+        context.apply.assert_not_called()
+        reconcile.assert_not_called()
+
     def test_failed_pdf_prevents_partial_results_profiles_and_offer_removal(self) -> None:
         for mode in ("inicio", "curso"):
             for failure in (ValueError("Ambiguous originating pool"), TimeoutError("sin respuesta")):

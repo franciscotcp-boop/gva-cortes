@@ -15,6 +15,7 @@ const {
   receiptSuccessfulModes,
   validateRunReceipt,
   recoveryModesForRun,
+  recoveryIncidentAge,
   shouldMonitor,
   staleRunReason,
 } = runWatchdog._test;
@@ -150,7 +151,7 @@ test("calcula las fuentes activas de cada fecha", () => {
     calendarModes(new Date("2026-07-17T10:00:00Z")),
     ["inicio", "acreditaciones"]
   );
-  assert.deepEqual(calendarModes(new Date("2026-09-04T12:00:00Z")), ["acreditaciones"]);
+  assert.deepEqual(calendarModes(new Date("2026-09-04T12:00:00Z")), ["acreditaciones", "dificil"]);
 });
 
 test("de septiembre a junio vigila adjudicaciones y puestos ofertados", () => {
@@ -425,10 +426,10 @@ test("confirma por correo una recuperacion que termino despues del primer aviso"
 });
 
 test("detecta el turno omitido aunque el vigilante llegue fuera de su hora", () => {
-  const now = new Date("2026-09-30T12:10:00Z");
+  const now = new Date("2026-09-30T14:10:00Z");
   assert.deepEqual(calendarModes(now), []);
   assert.equal(shouldMonitor(now), true);
-  assert.deepEqual(dueScheduledChecks(now), [{ mode: "puestos", scheduledAt: "2026-09-30T11:07:00.000Z" }]);
+  assert.deepEqual(dueScheduledChecks(now), [{ mode: "puestos", scheduledAt: "2026-09-30T13:37:00.000Z" }]);
   assert.deepEqual(dueScheduledChecks(new Date("2026-09-30T07:30:00Z")), []);
   assert.deepEqual(dueScheduledChecks(new Date("2026-09-30T07:37:00Z")), [{ mode: "puestos", scheduledAt: "2026-09-30T07:07:00.000Z" }]);
 });
@@ -440,17 +441,17 @@ test("los turnos pendientes respetan Madrid en invierno y no arrastran dificil c
 });
 
 test("recupera el ultimo turno del dia tras mas de tres horas sin eventos", () => {
-  const delayedMidday = new Date("2026-10-01T10:45:00Z");
-  const morning = [{ mode: "curso", scheduledAt: "2026-10-01T07:20:00.000Z" }];
+  const delayedMidday = new Date("2026-10-01T16:18:00Z");
+  const morning = [{ mode: "curso", scheduledAt: "2026-10-01T13:17:00.000Z" }];
   assert.deepEqual(dueScheduledChecks(delayedMidday), morning);
   assert.deepEqual(dueScheduledChecks(delayedMidday, 30, 180), []);
   const now = new Date("2026-10-01T21:50:00Z");
-  const expected = [{ mode: "curso", scheduledAt: "2026-10-01T19:20:00.000Z" }];
+  const expected = [{ mode: "curso", scheduledAt: "2026-10-01T19:17:00.000Z" }];
   assert.deepEqual(dueScheduledChecks(now), expected);
   const delayed = new Date("2026-10-01T21:59:00Z");
   assert.deepEqual(calendarModes(delayed), []);
   assert.equal(shouldMonitor(delayed), true);
-  const gap = new Date("2026-10-01T08:00:00Z");
+  const gap = new Date("2026-10-01T15:58:00Z");
   assert.deepEqual(dueScheduledChecks(gap, 30, 30), []);
   assert.equal(shouldMonitor(gap, "schedule", 30, 30), false);
   assert.equal(shouldMonitor(gap, "schedule", 30, 1440), true);
@@ -458,13 +459,13 @@ test("recupera el ultimo turno del dia tras mas de tres horas sin eventos", () =
 });
 
 test("un JSON reciente o una ejecucion de otra fuente no ocultan puestos sin revisar", async () => {
-  const now = new Date("2026-09-30T12:10:00Z");
+  const now = new Date("2026-09-30T14:10:00Z");
   const checks = dueScheduledChecks(now);
-  const run = { id: 1, status: "completed", conclusion: "success", created_at: "2026-09-30T11:20:00Z" };
-  let steps = [{ name: "Actualizar cortes de adjudicaciones", conclusion: "success", started_at: "2026-09-30T11:21:00Z" }];
+  const run = { id: 1, status: "completed", conclusion: "success", created_at: "2026-09-30T13:50:00Z" };
+  let steps = [{ name: "Actualizar cortes de adjudicaciones", conclusion: "success", started_at: "2026-09-30T13:51:00Z" }];
   const github = { rest: { actions: { listJobsForWorkflowRun: async () => ({ data: { jobs: [{ conclusion: "success", steps }] } }) } } };
   assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [run], checks, now), checks);
-  steps = [{ name: "Actualizar puestos ofertados", conclusion: "skipped", started_at: "2026-09-30T11:21:00Z" }];
+  steps = [{ name: "Actualizar puestos ofertados", conclusion: "skipped", started_at: "2026-09-30T13:51:00Z" }];
   assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [run], checks, now), checks);
   steps[0].conclusion = "success";
   assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [run], checks, now), []);
@@ -528,4 +529,105 @@ test("lee el comprobante propio cuando GitHub omite los pasos de los jobs", asyn
   } } };
   assert.deepEqual(await readRunReceipt(github, "owner", "repo", run, () => receipt), receipt);
   await assert.rejects(readRunReceipt(github, "owner", "repo", run, () => ({ ...receipt, run_id: 16 })), /Comprobante no valido/);
+});
+
+test("recupera cada turno de media hora en los picos de publicacion", () => {
+  const cases = [
+    ["2026-10-05", "puestos", [13, 14, 15], [7, 37]],
+    ["2026-10-07", "puestos", [13, 14, 15], [7, 37]],
+    ["2026-10-06", "curso", [9, 10, 11, 12, 13, 14], [17, 47]],
+    ["2026-10-08", "curso", [9, 10, 11, 12, 13, 14], [17, 47]],
+    ["2026-10-02", "dificil", [13, 14, 15], [20, 50]],
+  ];
+  for (const [day, mode, hours, minutes] of cases) {
+    for (const hour of hours) for (const minute of minutes) {
+      const local = new Date(`${day}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+02:00`);
+      const checks = dueScheduledChecks(new Date(local.getTime() + 15 * 60000), 15);
+      assert.deepEqual(checks.find(check => check.mode === mode), { mode, scheduledAt: local.toISOString() });
+    }
+  }
+  assert.deepEqual(dueScheduledChecks(new Date("2026-12-02T13:52:00Z"), 15), [
+    { mode: "puestos", scheduledAt: "2026-12-02T13:37:00.000Z" },
+  ]);
+});
+
+test("una incidencia reciente espera la pausa sin despachar otra ejecucion", async () => {
+  setWatchdogEnv();
+  const now = new Date();
+  const { github, calls } = recoveryGithub(now);
+  const failure = { id: 1, status: "completed", conclusion: "failure", created_at: isoMinutesBefore(now, 20) };
+  github.rest.actions.listWorkflowRuns = async () => ({ data: { workflow_runs: [failure] } });
+  github.rest.issues.listForRepo = async () => ({ data: [{ number: 12, title: "[AdjudicApp] Recuperacion automatica fallida",
+    updated_at: isoMinutesBefore(now, 30), html_url: "https://github.com/example/issues/12" }] });
+  const manualContext = context();
+  manualContext.eventName = "workflow_dispatch";
+  const result = await runWatchdog({ github, context: manualContext, core: fakeCore(), now, auditSchedule: false });
+  assert.equal(result.action, "incident_already_open");
+  assert.equal(calls.dispatch.length, 0);
+  assert.equal(calls.cancel.length, 0);
+  assert.equal(calls.issues.length, 0);
+});
+
+test("una alerta abierta no bloquea indefinidamente la recuperacion", async () => {
+  setWatchdogEnv();
+  const now = new Date();
+  const { github, calls } = recoveryGithub(now);
+  const incident = { number: 12, title: "[AdjudicApp] Recuperacion automatica fallida",
+    updated_at: isoMinutesBefore(now, 61), html_url: "https://github.com/example/issues/12" };
+  github.rest.issues.listForRepo = async () => ({ data: [incident] });
+  const comments = [];
+  github.rest.issues.createComment = async args => { comments.push(args); return { data: {} }; };
+  const manualContext = context();
+  manualContext.eventName = "workflow_dispatch";
+  const result = await runWatchdog({ github, context: manualContext, core: fakeCore(), now, sleepFn: async () => {}, auditSchedule: false });
+  assert.equal(result.recoverySucceeded, true);
+  assert.equal(calls.dispatch.length, 1);
+  assert.equal(calls.issues.length, 0);
+  assert.equal(comments.length, 1);
+  assert.equal(calls.issueUpdates[0].state, "closed");
+});
+
+test("un reintento fallido conserva la alerta y el periodo de pausa", async () => {
+  setWatchdogEnv();
+  const now = new Date();
+  const { github, calls } = recoveryGithub(now, "failure");
+  const incident = { number: 12, title: "[AdjudicApp] Recuperacion automatica fallida",
+    updated_at: isoMinutesBefore(now, 61), html_url: "https://github.com/example/issues/12" };
+  github.rest.issues.listForRepo = async () => ({ data: [incident] });
+  const comments = [];
+  github.rest.issues.createComment = async args => { comments.push(args); return { data: {} }; };
+  const manualContext = context();
+  manualContext.eventName = "workflow_dispatch";
+  const result = await runWatchdog({ github, context: manualContext, core: fakeCore(), now, sleepFn: async () => {}, auditSchedule: false });
+  assert.equal(result.recoverySucceeded, false);
+  assert.equal(calls.dispatch.length, 1);
+  assert.equal(comments.length, 1);
+  assert.equal(calls.issueUpdates.length, 1);
+  assert.equal(calls.issueUpdates[0].state, undefined);
+  assert.match(calls.issueUpdates[0].body, /adjudicapp-recovery-at:/);
+});
+
+test("otros comentarios y cancelaciones no reinician la pausa de recuperacion", () => {
+  const now = new Date("2026-10-01T12:00:00Z");
+  const issue = { created_at: "2026-10-01T08:00:00Z", updated_at: "2026-10-01T11:59:00Z",
+    body: "<!-- adjudicapp-recovery-at: 2026-10-01T10:00:00.000Z -->\nInforme" };
+  assert.equal(recoveryIncidentAge(issue, now), 120);
+  assert.equal(recoveryIncidentAge({ ...issue, body: "Informe antiguo" }, now), 240);
+  assert.equal(recoveryIncidentAge({ ...issue, body: "<!-- adjudicapp-recovery-at: invalid -->" }, now), 240);
+});
+
+test("el aviso de una bolsa dudosa incluye el puesto y las opciones concretas", () => {
+  const now = new Date("2026-10-01T12:00:00Z");
+  const report = buildIncidentReport({
+    now, staleRuns: [], cancellationResults: [],
+    generatedBefore: generatedAtHealth(now.toISOString(), now),
+    generatedAfter: generatedAtHealth(now.toISOString(), now),
+    recoveryStarted: false, recoverySucceeded: false, recoveryMessage: "Se necesita confirmacion.",
+    programReviews: [{ candidate_name: "VICEDO DURA, GUILLERMO", slot_id: "841479", center_code: "03012980",
+      post_specialty_code: "297", candidate_pools: [{ specialty_code: "211", position: 7 }, { specialty_code: "256", position: 230 }] }],
+  });
+  assert.match(report, /Bolsas de origen pendientes de tu confirmacion/);
+  assert.match(report, /VICEDO DURA, GUILLERMO; puesto 841479/);
+  assert.match(report, /211 \(posicion 7\), 256 \(posicion 230\)/);
+  assert.match(report, /ultimos datos validos/);
 });

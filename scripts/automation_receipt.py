@@ -14,7 +14,7 @@ from automation_schedule import explicit_modes
 RECEIPT_FILE = "automation-check.json"
 
 
-def build_receipt(modes: str, environment: dict[str, str]) -> dict:
+def build_receipt(modes: str, environment: dict[str, str], program_reviews: list[dict] | None = None) -> dict:
     selected = explicit_modes(modes)
     if not selected:
         raise ValueError("Cannot record a check without a selected source")
@@ -28,7 +28,24 @@ def build_receipt(modes: str, environment: dict[str, str]) -> dict:
         "source_outcomes": {mode: environment.get(f"RESULT_{mode.upper()}", "skipped") for mode in selected},
         "validation_outcome": environment.get("RESULT_VALIDATION", "skipped"),
         "publication_outcome": environment.get("RESULT_PUBLICATION", "skipped"),
+        "program_reviews": program_reviews or [],
     }
+
+
+def load_program_reviews(environment: dict[str, str], path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    report = json.loads(path.read_text(encoding="utf8"))
+    if (
+        report.get("schema_version") != 1
+        or str(report.get("run_id")) != environment.get("GITHUB_RUN_ID")
+        or str(report.get("run_attempt")) != environment.get("GITHUB_RUN_ATTEMPT")
+    ):
+        return []
+    cases = report.get("cases")
+    if not isinstance(cases, list) or not all(isinstance(case, dict) for case in cases):
+        raise ValueError("Invalid program review report")
+    return cases
 
 
 def read_archive(content: bytes) -> dict:
@@ -53,7 +70,9 @@ def main() -> int:
     if args.read_archive:
         print(json.dumps(read_archive(sys.stdin.buffer.read())))
     else:
-        args.output.write_text(json.dumps(build_receipt(args.modes, dict(os.environ))), encoding="utf8")
+        environment = dict(os.environ)
+        reviews = load_program_reviews(environment, Path("program-review-pending.json"))
+        args.output.write_text(json.dumps(build_receipt(args.modes, environment, reviews)), encoding="utf8")
     return 0
 
 

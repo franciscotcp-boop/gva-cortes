@@ -15,9 +15,13 @@ from automation_schedule import (
     BROAD_SCHEDULE,
     CLEANUP_SCHEDULE,
     COURSE_SCHEDULE,
+    COURSE_LATE_SCHEDULE,
     DIFFICULT_SCHEDULE,
+    DIFFICULT_LATE_SCHEDULE,
+    EXPLICIT_SCHEDULES,
     MADRID,
     OFFER_SCHEDULE,
+    OFFER_LATE_SCHEDULE,
     POSITION_SCHEDULE,
     START_SCHEDULE,
     explicit_modes,
@@ -58,7 +62,7 @@ class AutomationScheduleTests(unittest.TestCase):
     def test_accreditations_run_on_friday_but_never_in_august(self) -> None:
         self.assertEqual(
             scheduled_modes(local("2026-09-04T14:00:00")),
-            ("acreditaciones",),
+            ("acreditaciones", "dificil"),
         )
         self.assertEqual(scheduled_modes(local("2026-08-07T14:00:00")), ())
 
@@ -209,6 +213,31 @@ class AutomationScheduleTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             explicit_modes("inicio,desconocido")
+
+    def test_publication_peak_hours_and_late_checks(self) -> None:
+        for hour in range(9, 15):
+            self.assertIn("curso", scheduled_modes(local(f"2026-10-06T{hour:02}:17:00")))
+        for day, mode in (("2026-10-05", "puestos"), ("2026-10-07", "puestos"), ("2026-10-02", "dificil")):
+            for hour in (13, 14, 15):
+                self.assertIn(mode, scheduled_modes(local(f"{day}T{hour:02}:37:00")))
+        for expression, moment, mode in (
+            (COURSE_LATE_SCHEDULE, "2026-10-06T22:15:00", "curso"),
+            (OFFER_LATE_SCHEDULE, "2026-10-07T21:15:00", "puestos"),
+            (DIFFICULT_LATE_SCHEDULE, "2026-10-02T23:45:00", "dificil"),
+        ):
+            self.assertEqual(scheduled_event_modes(local(moment), expression), (mode,))
+
+    def test_explicit_events_cannot_reopen_an_off_season_or_expired_offer(self) -> None:
+        self.assertEqual(scheduled_event_modes(local("2026-07-08T14:45:00"), OFFER_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-08-05T14:45:00"), OFFER_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-10-03T00:05:00"), DIFFICULT_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-07-02T10:45:00"), COURSE_SCHEDULE), ())
+
+    def test_every_explicit_expression_is_deployed_with_a_madrid_timezone(self) -> None:
+        workflow = (ROOT / ".github/workflows/update-adjudicaciones.yml").read_text(encoding="utf8")
+        for expression in EXPLICIT_SCHEDULES:
+            self.assertIn(f'- cron: "{expression}"\n      timezone: "Europe/Madrid"', workflow)
+        self.assertEqual(workflow.count("- cron:"), len(EXPLICIT_SCHEDULES))
 
 
 if __name__ == "__main__":

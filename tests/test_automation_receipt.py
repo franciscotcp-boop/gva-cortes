@@ -3,10 +3,11 @@ import json
 from pathlib import Path
 import sys
 import unittest
+import tempfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from automation_receipt import build_receipt, read_archive
+from automation_receipt import build_receipt, load_program_reviews, read_archive
 
 
 class AutomationReceiptTests(unittest.TestCase):
@@ -41,3 +42,23 @@ class AutomationReceiptTests(unittest.TestCase):
             archive.writestr("automation-check.json", " " * (128 * 1024 + 1))
         with self.assertRaises(ValueError):
             read_archive(stream.getvalue())
+
+    def test_pending_program_reviews_belong_to_the_current_run_and_attempt(self):
+        case = {"slot_id": "841479", "candidate_name": "VICEDO DURA, GUILLERMO",
+                "center_code": "03012980", "post_specialty_code": "297",
+                "candidate_pools": [{"specialty_code": "256", "position": 230}]}
+        environment = {"GITHUB_RUN_ID": "17", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_SHA": "abc", "RESULT_CURSO": "failure"}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "program-review-pending.json"
+            report = {"schema_version": 1, "run_id": "17", "run_attempt": "2", "cases": [case]}
+            path.write_text(json.dumps(report), encoding="utf8")
+            self.assertEqual(load_program_reviews(environment, path), [case])
+            self.assertEqual(load_program_reviews({**environment, "GITHUB_RUN_ATTEMPT": "3"}, path), [])
+            self.assertEqual(load_program_reviews({**environment, "GITHUB_RUN_ID": "18"}, path), [])
+            receipt = build_receipt("curso", environment, load_program_reviews(environment, path))
+            self.assertEqual(receipt["program_reviews"], [case])
+            self.assertEqual(receipt["source_outcomes"], {"curso": "failure"})
+            self.assertEqual(receipt["publication_outcome"], "skipped")
+            path.write_text(json.dumps({**report, "cases": ["invalid"]}), encoding="utf8")
+            with self.assertRaises(ValueError):
+                load_program_reviews(environment, path)

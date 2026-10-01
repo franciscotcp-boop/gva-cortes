@@ -7,10 +7,11 @@ const ACTIVE_STATUSES = new Set([...QUEUE_STATUSES, "in_progress"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
 const FAILURE_ISSUE_TITLE = "[AdjudicApp] Recuperacion automatica fallida";
 const START_HOURS = new Set([9, 12, 15, 18, 21]);
+const COURSE_HOURS = new Set([9, 10, 11, 12, 13, 14, 15, 18, 21]);
 const POSITION_HOURS = new Set([9, 11, 13, 15, 17, 19]);
 const ACCREDITATION_HOURS = new Set([12, 14, 16, 18, 20]);
-const OFFER_HOURS = new Set([9, 11, 13, 15, 17, 19, 20]);
-const DIFFICULT_HOURS = new Set([9, 11, 13, 15, 17, 19, 21, 23]);
+const OFFER_HOURS = new Set([9, 11, 13, 14, 15, 17, 19, 20]);
+const DIFFICULT_HOURS = new Set([9, 11, 13, 14, 15, 17, 19, 21, 23]);
 const SOURCE_STEPS = {
   "Actualizar posiciones anuales": "posiciones",
   "Actualizar acreditaciones de ingles": "acreditaciones",
@@ -33,6 +34,12 @@ function ageMinutes(value, now = new Date()) {
   const timestamp = Date.parse(String(value || ""));
   if (!Number.isFinite(timestamp)) return Number.POSITIVE_INFINITY;
   return Math.max(0, (now.getTime() - timestamp) / 60000);
+}
+
+function recoveryIncidentAge(issue, now = new Date()) {
+  const marker = String(issue.body || "").match(/<!-- adjudicapp-recovery-at: ([^ ]+) -->/);
+  const attemptedAt = marker && Number.isFinite(Date.parse(marker[1])) ? marker[1] : null;
+  return ageMinutes(attemptedAt || issue.created_at || issue.updated_at, now);
 }
 
 function madridCalendar(now = new Date()) {
@@ -61,7 +68,7 @@ function calendarModes(now = new Date()) {
   const { month, day, weekday, hour } = madridCalendar(now);
   const modes = [];
   if ((month === 7 || month === 8) && weekday !== "Sun" && START_HOURS.has(hour)) modes.push("inicio");
-  if (month !== 7 && month !== 8 && (weekday === "Tue" || weekday === "Thu") && START_HOURS.has(hour)) modes.push("curso");
+  if (month !== 7 && month !== 8 && (weekday === "Tue" || weekday === "Thu") && COURSE_HOURS.has(hour)) modes.push("curso");
   if ((month === 6 || month === 7) && POSITION_HOURS.has(hour)) modes.push("posiciones");
   if (month !== 8 && weekday === "Fri" && ACCREDITATION_HOURS.has(hour)) modes.push("acreditaciones");
   const offersInSeason = (month >= 9 || month <= 6) || (month === 7 && day === 1);
@@ -69,6 +76,13 @@ function calendarModes(now = new Date()) {
   if (month !== 7 && month !== 8 && weekday === "Fri" && DIFFICULT_HOURS.has(hour)) modes.push("dificil");
   if (month !== 7 && month !== 8 && weekday === "Sat" && hour === 0) modes.push("limpieza_puestos");
   return modes;
+}
+
+function scheduledMinutes(mode, hour) {
+  if (mode === "curso") return hour >= 9 && hour <= 14 ? [17, 47] : [17];
+  if (mode === "puestos") return hour >= 13 && hour <= 15 ? [7, 37] : [7];
+  if (mode === "dificil") return hour >= 13 && hour <= 15 ? [20, 50] : [20];
+  return [20];
 }
 
 function dueScheduledChecks(now = new Date(), graceMinutes = 30, lookbackMinutes = 1440) {
@@ -82,7 +96,7 @@ function dueScheduledChecks(now = new Date(), graceMinutes = 30, lookbackMinutes
     const calendar = madridCalendar(value);
     if (calendar.year !== today.year || calendar.month !== today.month || calendar.day !== today.day) continue;
     for (const mode of calendarModes(value)) {
-      if (calendar.minute === (mode === "puestos" ? 7 : 20)) {
+      if (scheduledMinutes(mode, calendar.hour).includes(calendar.minute)) {
         due.set(mode, { mode, scheduledAt: value.toISOString() });
       }
     }
@@ -161,6 +175,7 @@ function buildIncidentReport({
   generatedAfter,
   failedRuns = [],
   missedChecks = [],
+  programReviews = [],
   recoveryRun,
   recoveryStarted,
   recoverySucceeded,
@@ -177,6 +192,7 @@ function buildIncidentReport({
     : "- No se detectaron fallos consecutivos.";
 
   return [
+    `<!-- adjudicapp-recovery-at: ${now.toISOString()} -->`,
     "@franciscotcp-boop",
     "",
     "El vigilante automatico de AdjudicApp ha intervenido.",
@@ -197,6 +213,16 @@ function buildIncidentReport({
     missedChecks.length
       ? missedChecks.map(check => `- ${check.mode}: ${madridTimestamp(new Date(check.scheduledAt))}`).join("\n")
       : "- No se detectaron turnos omitidos.",
+    ...(programReviews.length ? [
+      "",
+      "### Bolsas de origen pendientes de tu confirmacion",
+      "Se conservan los ultimos datos validos. No se adivina la bolsa de estos programas:",
+      ...programReviews.slice(0, 50).map(item =>
+        `- ${item.candidate_name}; puesto ${item.slot_id}, centro ${item.center_code}, programa ${item.post_specialty_code}. ` +
+        `Opciones: ${item.candidate_pools.map(pool => `${pool.specialty_code} (posicion ${pool.position})`).join(", ") || "ninguna bolsa verificada"}.`
+      ),
+      "Las decisiones anteriores solo se reutilizan para el mismo docente, puesto y centro dentro del mismo curso.",
+    ] : []),
     "",
     "### Nueva ejecucion",
     recoveryStarted
@@ -424,15 +450,10 @@ async function notifyIncident(github, owner, repo, success, body) {
 
   if (existingFailure) {
     await github.rest.issues.createComment({ owner, repo, issue_number: existingFailure.number, body });
-    if (success) {
-      await github.rest.issues.update({
-        owner,
-        repo,
-        issue_number: existingFailure.number,
-        state: "closed",
-        state_reason: "completed",
-      });
-    }
+    await github.rest.issues.update({
+      owner, repo, issue_number: existingFailure.number, body,
+      ...(success ? { state: "closed", state_reason: "completed" } : {}),
+    });
     return existingFailure.html_url;
   }
 
@@ -493,6 +514,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   const dataMaxAgeMinutes = positiveNumber(process.env.DATA_MAX_AGE_MINUTES, 240);
   const failureThreshold = positiveNumber(process.env.FAILURE_THRESHOLD, 1);
   const recoveryWaitMinutes = positiveNumber(process.env.RECOVERY_WAIT_MINUTES, 8);
+  const recoveryCooldownMinutes = positiveNumber(process.env.RECOVERY_COOLDOWN_MINUTES, 60);
   const dryRun = envBoolean(process.env.DRY_RUN);
   const testAlert = envBoolean(process.env.TEST_ALERT);
   const graceMinutes = positiveNumber(process.env.SCHEDULE_GRACE_MINUTES, 30);
@@ -578,7 +600,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   }
 
   const existingIncident = await findOpenFailureIssue(github, owner, repo);
-  if (existingIncident) {
+  if (existingIncident && recoveryIncidentAge(existingIncident, now) < recoveryCooldownMinutes) {
     const cancelled = [];
     for (const run of staleRuns) {
       try {
@@ -593,14 +615,15 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
         owner,
         repo,
         issue_number: existingIncident.number,
-        body: `Se cancelaron ejecuciones nuevamente bloqueadas (${cancelled.join(", ")}). No se lanza otro reintento mientras esta incidencia siga abierta.`,
+        body: `Se cancelaron ejecuciones nuevamente bloqueadas (${cancelled.join(", ")}). Se respeta la pausa entre reintentos de ${recoveryCooldownMinutes} minutos.`,
       });
     }
-    core.warning(`La incidencia ${existingIncident.html_url} sigue abierta; se evita encadenar nuevos reintentos.`);
+    core.warning(`La incidencia ${existingIncident.html_url} sigue abierta; se espera la pausa entre reintentos de ${recoveryCooldownMinutes} minutos.`);
     core.setOutput("alert_sent", "true");
     core.setOutput("alert_url", existingIncident.html_url);
     return { action: "incident_already_open", issueUrl: existingIncident.html_url };
   }
+  if (existingIncident) core.info("La pausa ha terminado; se vuelve a comprobar la fuente pendiente sin cerrar prematuramente la incidencia.");
 
   const cancellationResults = [];
   for (const run of staleRuns) {
@@ -649,6 +672,20 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     finalRun = await waitUntilCompleted(github, owner, repo, recoveryRun.id, recoveryWaitMinutes);
   }
 
+  let programReviews = [];
+  const reportRun = finalRun && finalRun.status === "completed"
+    ? (finalRun.conclusion === "success" ? null : finalRun) : failedRuns[0];
+  if (reportRun) {
+    try {
+      const receipt = await readRunReceipt(github, owner, repo, reportRun);
+      programReviews = (receipt && Array.isArray(receipt.program_reviews) ? receipt.program_reviews : [])
+        .filter(item => item && item.candidate_name && item.slot_id && item.center_code && item.post_specialty_code &&
+          Array.isArray(item.candidate_pools) && item.candidate_pools.every(pool => pool.specialty_code && Number.isInteger(pool.position)));
+    } catch (error) {
+      core.warning(`No se pudo leer el detalle de las bolsas pendientes: ${error.message}`);
+    }
+  }
+
   let metadataAfter = { generatedAt: null, schemaVersion: null, schoolYear: null };
   let metadataAfterError = "";
   try {
@@ -686,6 +723,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     generatedAfter,
     failedRuns,
     missedChecks,
+    programReviews,
     recoveryRun: finalRun || recoveryRun,
     recoveryStarted,
     recoverySucceeded,
@@ -721,6 +759,7 @@ module.exports._test = {
   validateRunReceipt,
   positiveNumber,
   recoveryModesForRun,
+  recoveryIncidentAge,
   runAgeMinutes,
   shouldMonitor,
   staleRunReason,

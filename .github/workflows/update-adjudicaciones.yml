@@ -36,8 +36,10 @@ on:
     # Inicio de curso: julio y agosto, lunes a sabado.
     - cron: "20 9,12,15,18,21 * 7-8 1-6"
       timezone: "Europe/Madrid"
-    # Adjudicaciones continuas: martes y jueves, septiembre-junio.
-    - cron: "20 9,12,15,18,21 * 1-6,9-12 2,4"
+    # Adjudicaciones: cada media hora durante la franja habitual y sus retrasos.
+    - cron: "17,47 9-14 * 1-6,9-12 2,4"
+      timezone: "Europe/Madrid"
+    - cron: "17 15,18,21 * 1-6,9-12 2,4"
       timezone: "Europe/Madrid"
     # Listas anuales de participantes: junio y julio.
     - cron: "20 9,11,13,15,17,19 * 6-7 *"
@@ -45,11 +47,15 @@ on:
     # Acreditaciones de ingles: viernes, septiembre-julio salvo agosto.
     - cron: "20 12,14,16,18,20 * 1-7,9-12 5"
       timezone: "Europe/Madrid"
-    # Puestos ofertados: turnos explicitos para que un retraso de GitHub no los omita.
-    - cron: "7 9,11,13,15,17,19,20 * 1-7,9-12 1,3"
+    # Puestos: cada media hora alrededor de las 14:00, mas revisiones de cierre.
+    - cron: "7,37 13-15 * 1-7,9-12 1,3"
       timezone: "Europe/Madrid"
-    # Puestos de dificil cobertura: viernes, septiembre-junio.
-    - cron: "20 9,11,13,15,17,19,21,23 * 1-6,9-12 5"
+    - cron: "7 9,11,17,19,20 * 1-7,9-12 1,3"
+      timezone: "Europe/Madrid"
+    # Dificil cobertura: viernes, con vigilancia reforzada alrededor de las 14:00.
+    - cron: "20,50 13-15 * 1-6,9-12 5"
+      timezone: "Europe/Madrid"
+    - cron: "20 9,11,17,19,21,23 * 1-6,9-12 5"
       timezone: "Europe/Madrid"
     # Retirada de dificil cobertura al comenzar el sabado.
     - cron: "20 0 * 1-6,9-12 6"

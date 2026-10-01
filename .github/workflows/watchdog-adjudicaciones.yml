@@ -7,8 +7,9 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    # Evita el inicio de la hora. Madrid y los turnos omitidos se resuelven en el script.
-    - cron: "11,26,41,56 7-23 * * *"
+    # Vigila cada cuarto de hora en Madrid, incluido el cambio de dia del sabado.
+    - cron: "11,26,41,56 0,9-23 * * *"
+      timezone: "Europe/Madrid"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -54,11 +55,13 @@ jobs:
         env:
           PRIMARY_WORKFLOW: update-adjudicaciones.yml
           DATA_PATH: data/adjudicaciones.json
-          RUN_STALE_MINUTES: "30"
+          # No cancelar un procesamiento valido antes del timeout de 35 min.
+          RUN_STALE_MINUTES: "40"
           DATA_MAX_AGE_MINUTES: "1440"
           FAILURE_THRESHOLD: "1"
           RECOVERY_WAIT_MINUTES: "15"
-          SCHEDULE_GRACE_MINUTES: "30"
+          RECOVERY_COOLDOWN_MINUTES: "60"
+          SCHEDULE_GRACE_MINUTES: "15"
           SCHEDULE_LOOKBACK_MINUTES: "1440"
           DRY_RUN: ${{ inputs.dry_run || false }}
           TEST_ALERT: ${{ inputs.test_alert || false }}

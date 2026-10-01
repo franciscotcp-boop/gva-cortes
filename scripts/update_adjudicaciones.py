@@ -1113,6 +1113,30 @@ PROGRAM_NOTES = {
 }
 
 
+class ProgramReviewRequired(ValueError):
+    def __init__(self, cases: list[dict]) -> None:
+        self.cases = cases
+        details = []
+        for case in cases:
+            choices = [(item["specialty_code"], item["position"]) for item in case["candidate_pools"]]
+            details.append(
+                f"{case['slot_id']} ({case['candidate_name']}, {case['center_code']}, "
+                f"program {case['post_specialty_code']}): {choices}"
+            )
+        super().__init__("Ambiguous originating pool for program posts: " + "; ".join(details))
+
+
+def save_program_review_report(cases: list[dict], path: Path | None = None) -> None:
+    destination = ROOT / "program-review-pending.json" if path is None else path
+    report = {
+        "schema_version": 1,
+        "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+        "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+        "cases": cases,
+    }
+    destination.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
+
+
 def load_program_reviews(pdf_sha256: str, path: Path | None = None) -> dict[str, dict]:
     source = PROGRAM_REVIEWS_PATH if path is None else path
     if not source.exists():
@@ -1128,11 +1152,46 @@ def load_program_reviews(pdf_sha256: str, path: Path | None = None) -> dict[str,
     return result
 
 
+def program_preference_key(entry: dict) -> tuple[str, str, str, str]:
+    return (
+        str(entry["slot_id"]), normalized_name(entry["candidate_name"]),
+        str(entry["center_code"]), str(entry["post_specialty_code"]),
+    )
+
+
+def load_confirmed_program_preferences(
+    published_date: str | None, path: Path | None = None,
+) -> dict[tuple[str, str, str, str], dict]:
+    """Reuse an owner's decision only for the same person, post and school year."""
+    source = PROGRAM_REVIEWS_PATH if path is None else path
+    if not published_date or not source.exists():
+        return {}
+    school_year = school_year_for_date(published_date, now_local())
+    documents = json.loads(source.read_text(encoding="utf-8"))["documents"]
+    result = {}
+    conflicts = set()
+    for sha, document in documents.items():
+        reviewed_date = document.get("source_date")
+        if (
+            document.get("reviewed_by") != "project_owner"
+            or not reviewed_date or reviewed_date > published_date
+            or school_year_for_date(reviewed_date, now_local()) != school_year
+        ):
+            continue
+        for entry in document.get("assignments", []):
+            key = program_preference_key(entry)
+            if key in result and result[key]["specialty_code"] != entry["specialty_code"]:
+                conflicts.add(key)
+            result[key] = {**entry, "confirmed_source_sha256": sha}
+    return {key: entry for key, entry in result.items() if key not in conflicts}
+
+
 def resolve_program_assignments(
     covered: list[Adjudication],
     statuses: list[StatusRecord],
     headers: dict[str, str],
     reviews: dict[str, dict] | None = None,
+    confirmed_preferences: dict[tuple[str, str, str, str], dict] | None = None,
 ) -> list[Adjudication]:
     """Keep the originating pool for area/program posts, never ordinary mismatches."""
     awarded: dict[str, set[tuple[str, int]]] = {}
@@ -1151,6 +1210,13 @@ def resolve_program_assignments(
         if any(code == post.specialty_code for code, _ in candidates):
             continue
         review = (reviews or {}).get(post.slot_id)
+        reused = False
+        if review is None:
+            key = (post.slot_id, normalized_name(post.candidate_name), post.center_code, post.specialty_code)
+            review = (confirmed_preferences or {}).get(key)
+            if review and len({candidate for candidate in candidates if candidate[0] == review["specialty_code"]}) != 1:
+                review = None
+            reused = review is not None
         if review:
             if (
                 normalized_name(review["candidate_name"]) != normalized_name(post.candidate_name)
@@ -1162,22 +1228,30 @@ def resolve_program_assignments(
             if len(candidates) != 1:
                 raise ValueError(f"Reviewed originating pool not uniquely awarded for post {post.slot_id}")
         if len(candidates) != 1:
-            pending_reviews.append(
-                f"{post.slot_id} ({post.candidate_name}, {post.center_code}, "
-                f"program {post.specialty_code}): {sorted(candidates)}"
-            )
+            pending_reviews.append({
+                "slot_id": post.slot_id, "candidate_name": post.candidate_name,
+                "center_code": post.center_code, "post_specialty_code": post.specialty_code,
+                "candidate_pools": [{"specialty_code": code, "position": position} for code, position in sorted(candidates)],
+            })
             continue
         code, position = next(iter(candidates))
         if code not in headers:
             raise ValueError(f"Missing originating header {code} for program post {post.slot_id}")
         note = review["observations"] if review else f"{post.specialty_code} {PROGRAM_NOTES[post.specialty_code]}"
+        if reused:
+            print(
+                f"programa {post.specialty_code}: reutilizada decision confirmada "
+                f"para {post.slot_id}, {post.candidate_name}, bolsa {code}, "
+                f"posicion actual {position}, fuente {review['confirmed_source_sha256']}",
+                flush=True,
+            )
         result.append(replace(
             post, cut=position, specialty_code=code, specialty_name=headers[code],
             post_specialty_code=post.specialty_code,
             observations="; ".join(filter(None, (post.observations, note))),
         ))
     if pending_reviews:
-        raise ValueError("Ambiguous originating pool for program posts: " + "; ".join(pending_reviews))
+        raise ProgramReviewRequired(pending_reviews)
     return result
 
 
@@ -1248,7 +1322,10 @@ def parse_pdf(
     if len(statuses) < 1000:
         raise ValueError(f"El PDF de {body} solo contiene {len(statuses)} estados validos")
 
-    rows.extend(resolve_program_assignments(list(covered_assignments.values()), statuses, headers, load_program_reviews(sha)))
+    rows.extend(resolve_program_assignments(
+        list(covered_assignments.values()), statuses, headers, load_program_reviews(sha),
+        load_confirmed_program_preferences(published_date),
+    ))
     valid_rows = [row for row in rows if owning_body_for_specialty(row.specialty_code) == body]
     best: OrderedDict[tuple[str, str], Adjudication] = OrderedDict()
     for row in valid_rows:
@@ -1978,6 +2055,7 @@ def run_mode(
     print(f"{mode}: encontrados {len(links)} enlaces PDF")
     parsed_items: list[ParsedPdf] = []
     failed_sources: list[str] = []
+    program_reviews: list[dict] = []
     changed = False
     for link in links:
         if url_already_seen(data, link["url"]):
@@ -2034,9 +2112,13 @@ def run_mode(
             print(f"{mode}: nuevo PDF {parsed.body} {parsed.published_date or 'sin fecha'} {link['url']} filas={len(parsed.rows)}")
         except Exception as exc:
             print(f"WARNING: no se pudo procesar {link['url']}: {exc}", file=sys.stderr)
+            if isinstance(exc, ProgramReviewRequired):
+                program_reviews.extend({**case, "source_url": link["url"], "pdf_sha256": sha256} for case in exc.cases)
             failed_sources.append(f"{link['url']}: {exc}")
     # Do not publish one body's new results while silently keeping the other stale.
     if failed_sources:
+        if program_reviews:
+            save_program_review_report(program_reviews)
         raise RuntimeError(
             "Actualizacion incompleta; se conservan los datos publicados. "
             "Fuentes pendientes: " + "; ".join(failed_sources)

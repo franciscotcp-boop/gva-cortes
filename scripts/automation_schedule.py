@@ -18,26 +18,33 @@ ALL_MODES = (
     "limpieza_puestos",
 )
 START_HOURS = frozenset({9, 12, 15, 18, 21})
+COURSE_HOURS = frozenset({9, 10, 11, 12, 13, 14, 15, 18, 21})
 POSITION_HOURS = frozenset({9, 11, 13, 15, 17, 19})
 ACCREDITATION_HOURS = frozenset({12, 14, 16, 18, 20})
-OFFER_HOURS = frozenset({9, 11, 13, 15, 17, 19, 20})
-DIFFICULT_HOURS = frozenset({9, 11, 13, 15, 17, 19, 21, 23})
+OFFER_HOURS = frozenset({9, 11, 13, 14, 15, 17, 19, 20})
+DIFFICULT_HOURS = frozenset({9, 11, 13, 14, 15, 17, 19, 21, 23})
 BROAD_SCHEDULE = "20 7-23 * * *"
 START_SCHEDULE = "20 9,12,15,18,21 * 7-8 1-6"
-COURSE_SCHEDULE = "20 9,12,15,18,21 * 1-6,9-12 2,4"
+COURSE_SCHEDULE = "17,47 9-14 * 1-6,9-12 2,4"
+COURSE_LATE_SCHEDULE = "17 15,18,21 * 1-6,9-12 2,4"
 POSITION_SCHEDULE = "20 9,11,13,15,17,19 * 6-7 *"
 ACCREDITATION_SCHEDULE = "20 12,14,16,18,20 * 1-7,9-12 5"
-OFFER_SCHEDULE = "7 9,11,13,15,17,19,20 * 1-7,9-12 1,3"
-DIFFICULT_SCHEDULE = "20 9,11,13,15,17,19,21,23 * 1-6,9-12 5"
+OFFER_SCHEDULE = "7,37 13-15 * 1-7,9-12 1,3"
+OFFER_LATE_SCHEDULE = "7 9,11,17,19,20 * 1-7,9-12 1,3"
+DIFFICULT_SCHEDULE = "20,50 13-15 * 1-6,9-12 5"
+DIFFICULT_LATE_SCHEDULE = "20 9,11,17,19,21,23 * 1-6,9-12 5"
 CLEANUP_SCHEDULE = "20 0 * 1-6,9-12 6"
 
 EXPLICIT_SCHEDULES = {
     START_SCHEDULE: "inicio",
     COURSE_SCHEDULE: "curso",
+    COURSE_LATE_SCHEDULE: "curso",
     POSITION_SCHEDULE: "posiciones",
     ACCREDITATION_SCHEDULE: "acreditaciones",
     OFFER_SCHEDULE: "puestos",
+    OFFER_LATE_SCHEDULE: "puestos",
     DIFFICULT_SCHEDULE: "dificil",
+    DIFFICULT_LATE_SCHEDULE: "dificil",
     CLEANUP_SCHEDULE: "limpieza_puestos",
 }
 
@@ -56,7 +63,7 @@ def scheduled_modes(value: datetime) -> tuple[str, ...]:
         modes.append("inicio")
 
     # Adjudicaciones continuas: martes y jueves, de septiembre a junio.
-    if month not in {7, 8} and weekday in {2, 4} and hour in START_HOURS:
+    if month not in {7, 8} and weekday in {2, 4} and hour in COURSE_HOURS:
         modes.append("curso")
 
     # Listas de participantes: todos los dias de junio y julio.
@@ -92,7 +99,12 @@ def scheduled_event_modes(
 
     expression = schedule_expression.strip()
     if expression in EXPLICIT_SCHEDULES:
-        return (EXPLICIT_SCHEDULES[expression],)
+        mode = EXPLICIT_SCHEDULES[expression]
+        # A delayed event keeps its source, but cannot reopen a closed season.
+        for hour in range(24):
+            if mode in scheduled_modes(value.astimezone(MADRID).replace(hour=hour)):
+                return (mode,)
+        return ()
 
     modes = scheduled_modes(value)
     if expression == BROAD_SCHEDULE:
