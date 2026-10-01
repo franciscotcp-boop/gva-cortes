@@ -108,6 +108,37 @@
           "observations": "277 / \u00c0MBIT SOCIOLING\u00dc\u00cdSTIC"
         }
       ]
+    },
+    "9c37583538315ed02524236e269ae69bdfa4649b5263b453d2ca63db13f80ee7": {
+      "source_date": "2026-10-01",
+      "source_url": "https://ceice.gva.es/documents/162909733/415637604/261001_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "841479",
+          "candidate_name": "VICEDO DURA, GUILLERMO",
+          "center_code": "03012980",
+          "specialty_code": "256",
+          "post_specialty_code": "297",
+          "observations": "297 / FPA Comunicaci\u00f3n (Valenciano) / FPA Comunicaci\u00f3 (Valenci\u00e0)"
+        },
+        {
+          "slot_id": "200253",
+          "candidate_name": "PELLICER CARBONERAS, LAURA",
+          "center_code": "46015587",
+          "specialty_code": "203",
+          "post_specialty_code": "275",
+          "observations": "275 / Cultura Cl\u00e1sica / Cultura Cl\u00e0ssica"
+        },
+        {
+          "slot_id": "207211",
+          "candidate_name": "ROCA COSCOLLA, JORGE",
+          "center_code": "12008521",
+          "specialty_code": "219",
+          "post_specialty_code": "276",
+          "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
+        }
+      ]
     }
   }
 }
