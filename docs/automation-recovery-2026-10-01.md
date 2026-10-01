@@ -30,3 +30,18 @@ validation gates, same-day difficult-offer expiry, and last-valid data are
 preserved. The watchdog does not create external automation or change client
 code. It cannot run while GitHub itself fails to start both workflows; that
 external failure remains a limitation, not a guarantee solved by this change.
+
+## Live recovery verification
+
+All 24 watchdog regression tests passed. After publication, watchdog #1000
+(run 36872722772) detected the unconfirmed continuous-results turn and
+automatically dispatched updater #1698 (run 36872768341). Both completed
+successfully. The updater read the official page, recognized the two already
+processed PDF hashes, validated the datasets and saved its run-scoped receipt.
+Recovery issue #13 was created and closed after confirmation.
+
+The resulting acf2705 commit updates monitoring metadata only. Structured
+comparison confirmed unchanged cuts, vacancy totals, profiles and remaining
+offers, so the recovery did not create another publication notification.
+The existing embedded CodePen showed the October 1 assignment details,
+both Maestros cut positions and the eight remaining Primaria offers.
