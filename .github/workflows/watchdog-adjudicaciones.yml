@@ -59,7 +59,7 @@ jobs:
           FAILURE_THRESHOLD: "1"
           RECOVERY_WAIT_MINUTES: "15"
           SCHEDULE_GRACE_MINUTES: "30"
-          SCHEDULE_LOOKBACK_MINUTES: "180"
+          SCHEDULE_LOOKBACK_MINUTES: "1440"
           DRY_RUN: ${{ inputs.dry_run || false }}
           TEST_ALERT: ${{ inputs.test_alert || false }}
         with:

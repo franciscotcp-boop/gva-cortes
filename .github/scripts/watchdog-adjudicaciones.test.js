@@ -439,6 +439,24 @@ test("los turnos pendientes respetan Madrid en invierno y no arrastran dificil c
   assert.deepEqual(dueScheduledChecks(new Date("2026-09-25T23:00:00Z")), [{ mode: "limpieza_puestos", scheduledAt: "2026-09-25T22:20:00.000Z" }]);
 });
 
+test("recupera el ultimo turno del dia tras mas de tres horas sin eventos", () => {
+  const delayedMidday = new Date("2026-10-01T10:45:00Z");
+  const morning = [{ mode: "curso", scheduledAt: "2026-10-01T07:20:00.000Z" }];
+  assert.deepEqual(dueScheduledChecks(delayedMidday), morning);
+  assert.deepEqual(dueScheduledChecks(delayedMidday, 30, 180), []);
+  const now = new Date("2026-10-01T21:50:00Z");
+  const expected = [{ mode: "curso", scheduledAt: "2026-10-01T19:20:00.000Z" }];
+  assert.deepEqual(dueScheduledChecks(now), expected);
+  const delayed = new Date("2026-10-01T21:59:00Z");
+  assert.deepEqual(calendarModes(delayed), []);
+  assert.equal(shouldMonitor(delayed), true);
+  const gap = new Date("2026-10-01T08:00:00Z");
+  assert.deepEqual(dueScheduledChecks(gap, 30, 30), []);
+  assert.equal(shouldMonitor(gap, "schedule", 30, 30), false);
+  assert.equal(shouldMonitor(gap, "schedule", 30, 1440), true);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-10-01T22:10:00Z")), []);
+});
+
 test("un JSON reciente o una ejecucion de otra fuente no ocultan puestos sin revisar", async () => {
   const now = new Date("2026-09-30T12:10:00Z");
   const checks = dueScheduledChecks(now);

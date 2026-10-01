@@ -71,7 +71,7 @@ function calendarModes(now = new Date()) {
   return modes;
 }
 
-function dueScheduledChecks(now = new Date(), graceMinutes = 30, lookbackMinutes = 180) {
+function dueScheduledChecks(now = new Date(), graceMinutes = 30, lookbackMinutes = 1440) {
   const due = new Map();
   const today = madridCalendar(now);
   const first = Math.ceil((now.getTime() - lookbackMinutes * 60000) / 60000) * 60000;
@@ -90,9 +90,9 @@ function dueScheduledChecks(now = new Date(), graceMinutes = 30, lookbackMinutes
   return [...due.values()];
 }
 
-function shouldMonitor(now = new Date(), eventName = "schedule") {
+function shouldMonitor(now = new Date(), eventName = "schedule", graceMinutes = 30, lookbackMinutes = 1440) {
   if (eventName !== "schedule") return true;
-  return calendarModes(now).length > 0 || dueScheduledChecks(now).length > 0;
+  return calendarModes(now).length > 0 || dueScheduledChecks(now, graceMinutes, lookbackMinutes).length > 0;
 }
 
 function runAgeMinutes(run, now = new Date()) {
@@ -496,7 +496,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   const dryRun = envBoolean(process.env.DRY_RUN);
   const testAlert = envBoolean(process.env.TEST_ALERT);
   const graceMinutes = positiveNumber(process.env.SCHEDULE_GRACE_MINUTES, 30);
-  const lookbackMinutes = positiveNumber(process.env.SCHEDULE_LOOKBACK_MINUTES, 180);
+  const lookbackMinutes = positiveNumber(process.env.SCHEDULE_LOOKBACK_MINUTES, 1440);
 
   if (testAlert) {
     const issueUrl = await sendTestAlert(github, owner, repo);
@@ -506,7 +506,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
     return { action: "test_alert", issueUrl };
   }
 
-  const monitorActive = shouldMonitor(now, context.eventName);
+  const monitorActive = shouldMonitor(now, context.eventName, graceMinutes, lookbackMinutes);
   core.setOutput("monitor_active", String(monitorActive));
   if (!monitorActive) {
     core.notice("Fuera del calendario o del turno de vigilancia. No se realiza ninguna accion.");
