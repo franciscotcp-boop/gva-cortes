@@ -35,6 +35,7 @@ from update_offered_positions import (
     merge_snapshot,
     enrich_assignments_from_offers,
     offered_position_links,
+    SourceValidationError,
     prune_expired_difficult,
     reconcile_after_adjudication,
     update_from_page,
@@ -329,6 +330,11 @@ class OfferedPositionLinkTests(unittest.TestCase):
             [correction],
         )
 
+    def test_recognizes_definitive_difficult_offers_without_a_descriptive_label(self) -> None:
+        html = b'<a href="/docs/261002_pue_def.pdf">Descargar PDF</a><a href="/docs/261002_par.pdf">Participantes</a>'
+        links = offered_position_links(html, "https://ceice.gva.es/pagina")
+        self.assertEqual([item["url"] for item in links], ["https://ceice.gva.es/docs/261002_pue_def.pdf"])
+
     def test_academic_year_boundary_keeps_july_first_in_previous_course(self) -> None:
         self.assertEqual(academic_year_for_check(date(2027, 7, 1)), "2026-2027")
         self.assertEqual(academic_year_for_check(date(2027, 7, 2)), "2027-2028")
@@ -376,6 +382,28 @@ class OfferedPositionUpdateTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_invalid_difficult_pdf_is_a_failure_and_keeps_previous_data(self) -> None:
+        payload = published_payload("2026-10-05", [sample_item(1)], "ordinary")
+        self.output.write_text(json.dumps(payload), encoding="utf8")
+        before = self.output.read_bytes()
+        page_url = "https://ceice.gva.es/pagina"
+        html = b'<a href="/docs/261008_pue_def.pdf">Puestos definitivos</a>'
+        with patch("update_offered_positions.parse_downloaded_pdf", side_effect=SourceValidationError("PDF incompleto")):
+            with self.assertRaisesRegex(SourceValidationError, "PDF incompleto"):
+                update_from_page(page_url=page_url, output=self.output, specialties_path=self.specialties,
+                                 centers_path=self.centers, target_year="2026-2027", kind="difficult",
+                                 current_date=date(2026, 10, 8), fetch=lambda url: html if url == page_url else b"%PDF-test")
+        self.assertEqual(self.output.read_bytes(), before)
+
+    def test_thursday_difficult_offers_and_friday_manual_exception_expire_next_day(self) -> None:
+        for today, tomorrow in ((date(2026, 10, 8), date(2026, 10, 9)), (date(2026, 10, 2), date(2026, 10, 3))):
+            payload = published_payload(today.isoformat(), [sample_item(2, difficult=True, snapshot_date=today.isoformat())], "difficult")
+            payload["snapshots"] = {"difficult": {"publication_date": today.isoformat(), "source": {}}}
+            same_day, removed_same_day = prune_expired_difficult(payload, today)
+            next_day, removed_next_day = prune_expired_difficult(payload, tomorrow)
+            self.assertEqual((removed_same_day, len(same_day["items"])), (0, 1))
+            self.assertEqual((removed_next_day, next_day["items"]), (1, []))
 
     def test_new_pdf_replaces_instead_of_accumulating(self) -> None:
         self.output.write_text(

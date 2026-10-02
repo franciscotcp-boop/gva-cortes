@@ -7,7 +7,7 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    # Vigila cada cuarto de hora en Madrid, incluido el cambio de dia del sabado.
+    # Vigila cada cuarto de hora en Madrid, incluido el cambio de dia.
     - cron: "11,26,41,56 0,9-23 * * *"
       timezone: "Europe/Madrid"
   workflow_dispatch:

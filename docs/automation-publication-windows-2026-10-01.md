@@ -9,11 +9,13 @@ does not add a Codeberg or Codex scheduler and does not change the clients.
 | --- | --- | --- | --- |
 | Ordinary offered posts | Monday/Wednesday, September through July 1 | Every 30 minutes from 13:07 to 15:37 | 09:07, 11:07, 17:07, 19:07, 20:07 |
 | Continuous adjudications | Tuesday/Thursday, September through June | Every 30 minutes from 09:17 to 14:47 | 15:17, 18:17, 21:17 |
-| Difficult-coverage offers | Friday, September through June | Every 30 minutes from 13:20 to 15:50 | 09:20, 11:20, 17:20, 19:20, 21:20, 23:20 |
+| Difficult-coverage offers | Thursday, September through June | Every 30 minutes from 13:20 to 15:50 | 09:20, 11:20, 17:20, 19:20, 21:20, 23:20 |
 
 Annual participants, English accreditations and start-of-course checks retain
-their existing seasons and hours. Difficult-coverage cleanup runs Saturday
-at 00:20. Delayed Friday events must not import difficult offers on Saturday.
+their existing seasons and hours. Difficult-coverage cleanup runs daily
+at 00:20 without consulting Conselleria, including exceptional manual lists.
+Thursday lists expire Friday. Delayed Thursday events must not import
+difficult offers on Friday. The manual October 2 list expires October 3.
 
 The workflow selects the source from the triggering cron, not its actual
 start hour. Seasons and allowed dates are checked even for delayed events.

@@ -73,8 +73,8 @@ function calendarModes(now = new Date()) {
   if (month !== 8 && weekday === "Fri" && ACCREDITATION_HOURS.has(hour)) modes.push("acreditaciones");
   const offersInSeason = (month >= 9 || month <= 6) || (month === 7 && day === 1);
   if (offersInSeason && (weekday === "Mon" || weekday === "Wed") && OFFER_HOURS.has(hour)) modes.push("puestos");
-  if (month !== 7 && month !== 8 && weekday === "Fri" && DIFFICULT_HOURS.has(hour)) modes.push("dificil");
-  if (month !== 7 && month !== 8 && weekday === "Sat" && hour === 0) modes.push("limpieza_puestos");
+  if (month !== 7 && month !== 8 && weekday === "Thu" && DIFFICULT_HOURS.has(hour)) modes.push("dificil");
+  if (month !== 7 && month !== 8 && hour === 0) modes.push("limpieza_puestos");
   return modes;
 }
 

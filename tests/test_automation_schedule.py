@@ -62,14 +62,14 @@ class AutomationScheduleTests(unittest.TestCase):
     def test_accreditations_run_on_friday_but_never_in_august(self) -> None:
         self.assertEqual(
             scheduled_modes(local("2026-09-04T14:00:00")),
-            ("acreditaciones", "dificil"),
+            ("acreditaciones",),
         )
         self.assertEqual(scheduled_modes(local("2026-08-07T14:00:00")), ())
 
     def test_june_overlap_is_expected(self) -> None:
         self.assertEqual(
             scheduled_modes(local("2027-06-03T15:00:00")),
-            ("curso", "posiciones"),
+            ("curso", "posiciones", "dificil"),
         )
 
     def test_offered_positions_run_monday_and_wednesday_in_the_season(self) -> None:
@@ -122,7 +122,7 @@ class AutomationScheduleTests(unittest.TestCase):
             ("acreditaciones",),
         )
         self.assertEqual(
-            scheduled_event_modes(delayed_autumn, DIFFICULT_SCHEDULE),
+            scheduled_event_modes(local("2026-09-03T13:47:00"), DIFFICULT_SCHEDULE),
             ("dificil",),
         )
         self.assertEqual(
@@ -151,7 +151,7 @@ class AutomationScheduleTests(unittest.TestCase):
             ("acreditaciones",),
         )
         self.assertEqual(
-            scheduled_event_modes(winter, DIFFICULT_SCHEDULE),
+            scheduled_event_modes(local("2026-12-03T16:45:00"), DIFFICULT_SCHEDULE),
             ("dificil",),
         )
         self.assertEqual(
@@ -182,23 +182,21 @@ class AutomationScheduleTests(unittest.TestCase):
         )
         self.assertNotIn("puestos", scheduled_modes(local("2026-07-08T09:00:00")))
 
-    def test_difficult_coverage_runs_friday_until_2320(self) -> None:
+    def test_difficult_coverage_runs_thursday_until_2320_not_friday(self) -> None:
         self.assertEqual(
-            scheduled_modes(local("2026-09-04T23:20:00")),
+            scheduled_modes(local("2026-09-03T23:20:00")),
             ("dificil",),
         )
         self.assertNotIn(
-            "dificil", scheduled_modes(local("2026-09-05T23:20:00"))
+            "dificil", scheduled_modes(local("2026-09-04T23:20:00"))
         )
         self.assertNotIn(
-            "dificil", scheduled_modes(local("2027-07-02T11:20:00"))
+            "dificil", scheduled_modes(local("2027-07-01T11:20:00"))
         )
 
-    def test_difficult_coverage_is_cleaned_at_the_start_of_saturday(self) -> None:
-        self.assertEqual(
-            scheduled_modes(local("2026-09-05T00:20:00")),
-            ("limpieza_puestos",),
-        )
+    def test_difficult_coverage_cleanup_covers_friday_and_manual_exceptions(self) -> None:
+        for day in ("2026-10-02", "2026-10-03", "2026-10-04"):
+            self.assertEqual(scheduled_modes(local(f"{day}T00:20:00")), ("limpieza_puestos",))
 
     def test_force_modes_are_independent_from_calendar(self) -> None:
         moment = local("2026-08-02T03:00:00")
@@ -217,20 +215,21 @@ class AutomationScheduleTests(unittest.TestCase):
     def test_publication_peak_hours_and_late_checks(self) -> None:
         for hour in range(9, 15):
             self.assertIn("curso", scheduled_modes(local(f"2026-10-06T{hour:02}:17:00")))
-        for day, mode in (("2026-10-05", "puestos"), ("2026-10-07", "puestos"), ("2026-10-02", "dificil")):
+        for day, mode in (("2026-10-05", "puestos"), ("2026-10-07", "puestos"), ("2026-10-08", "dificil")):
             for hour in (13, 14, 15):
                 self.assertIn(mode, scheduled_modes(local(f"{day}T{hour:02}:37:00")))
         for expression, moment, mode in (
             (COURSE_LATE_SCHEDULE, "2026-10-06T22:15:00", "curso"),
             (OFFER_LATE_SCHEDULE, "2026-10-07T21:15:00", "puestos"),
-            (DIFFICULT_LATE_SCHEDULE, "2026-10-02T23:45:00", "dificil"),
+            (DIFFICULT_LATE_SCHEDULE, "2026-10-08T23:45:00", "dificil"),
         ):
             self.assertEqual(scheduled_event_modes(local(moment), expression), (mode,))
 
     def test_explicit_events_cannot_reopen_an_off_season_or_expired_offer(self) -> None:
         self.assertEqual(scheduled_event_modes(local("2026-07-08T14:45:00"), OFFER_SCHEDULE), ())
         self.assertEqual(scheduled_event_modes(local("2026-08-05T14:45:00"), OFFER_SCHEDULE), ())
-        self.assertEqual(scheduled_event_modes(local("2026-10-03T00:05:00"), DIFFICULT_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-10-09T00:05:00"), DIFFICULT_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-10-09T14:20:00"), DIFFICULT_SCHEDULE), ())
         self.assertEqual(scheduled_event_modes(local("2026-07-02T10:45:00"), COURSE_SCHEDULE), ())
 
     def test_every_explicit_expression_is_deployed_with_a_madrid_timezone(self) -> None:

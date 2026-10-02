@@ -151,7 +151,8 @@ test("calcula las fuentes activas de cada fecha", () => {
     calendarModes(new Date("2026-07-17T10:00:00Z")),
     ["inicio", "acreditaciones"]
   );
-  assert.deepEqual(calendarModes(new Date("2026-09-04T12:00:00Z")), ["acreditaciones", "dificil"]);
+  assert.deepEqual(calendarModes(new Date("2026-09-04T12:00:00Z")), ["acreditaciones"]);
+  assert.deepEqual(calendarModes(new Date("2026-09-03T12:00:00Z")), ["curso", "dificil"]);
 });
 
 test("de septiembre a junio vigila adjudicaciones y puestos ofertados", () => {
@@ -175,11 +176,11 @@ test("los puestos ofertados terminan el uno de julio", () => {
 
 test("vigila dificil cobertura hasta las 23 y la retira al cambiar de dia", () => {
   assert.deepEqual(
-    calendarModes(new Date("2026-09-04T21:30:00Z")),
+    calendarModes(new Date("2026-09-03T21:30:00Z")),
     ["dificil"]
   );
   assert.deepEqual(
-    calendarModes(new Date("2026-09-04T22:30:00Z")),
+    calendarModes(new Date("2026-09-03T22:30:00Z")),
     ["limpieza_puestos"]
   );
 });
@@ -429,38 +430,44 @@ test("detecta el turno omitido aunque el vigilante llegue fuera de su hora", () 
   const now = new Date("2026-09-30T14:10:00Z");
   assert.deepEqual(calendarModes(now), []);
   assert.equal(shouldMonitor(now), true);
-  assert.deepEqual(dueScheduledChecks(now), [{ mode: "puestos", scheduledAt: "2026-09-30T13:37:00.000Z" }]);
-  assert.deepEqual(dueScheduledChecks(new Date("2026-09-30T07:30:00Z")), []);
-  assert.deepEqual(dueScheduledChecks(new Date("2026-09-30T07:37:00Z")), [{ mode: "puestos", scheduledAt: "2026-09-30T07:07:00.000Z" }]);
+  const cleanup = { mode: "limpieza_puestos", scheduledAt: "2026-09-29T22:20:00.000Z" };
+  assert.deepEqual(dueScheduledChecks(now), [cleanup, { mode: "puestos", scheduledAt: "2026-09-30T13:37:00.000Z" }]);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-09-30T07:30:00Z")), [cleanup]);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-09-30T07:37:00Z")), [cleanup, { mode: "puestos", scheduledAt: "2026-09-30T07:07:00.000Z" }]);
 });
 
-test("los turnos pendientes respetan Madrid en invierno y no arrastran dificil cobertura al sabado", () => {
-  assert.deepEqual(dueScheduledChecks(new Date("2026-10-28T09:10:00Z")), [{ mode: "puestos", scheduledAt: "2026-10-28T08:07:00.000Z" }]);
+test("los turnos pendientes respetan Madrid y no arrastran dificil cobertura al viernes", () => {
+  assert.deepEqual(dueScheduledChecks(new Date("2026-10-28T09:10:00Z")), [
+    { mode: "limpieza_puestos", scheduledAt: "2026-10-27T23:20:00.000Z" },
+    { mode: "puestos", scheduledAt: "2026-10-28T08:07:00.000Z" },
+  ]);
   assert.deepEqual(dueScheduledChecks(new Date("2026-09-26T22:30:00Z")), []);
-  assert.deepEqual(dueScheduledChecks(new Date("2026-09-25T23:00:00Z")), [{ mode: "limpieza_puestos", scheduledAt: "2026-09-25T22:20:00.000Z" }]);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-10-08T23:00:00Z")), [{ mode: "limpieza_puestos", scheduledAt: "2026-10-08T22:20:00.000Z" }]);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-10-02T08:00:00Z")), [{ mode: "limpieza_puestos", scheduledAt: "2026-10-01T22:20:00.000Z" }]);
 });
 
 test("recupera el ultimo turno del dia tras mas de tres horas sin eventos", () => {
-  const delayedMidday = new Date("2026-10-01T16:18:00Z");
-  const morning = [{ mode: "curso", scheduledAt: "2026-10-01T13:17:00.000Z" }];
+  const delayedMidday = new Date("2026-10-06T16:18:00Z");
+  const cleanup = { mode: "limpieza_puestos", scheduledAt: "2026-10-05T22:20:00.000Z" };
+  const morning = [cleanup, { mode: "curso", scheduledAt: "2026-10-06T13:17:00.000Z" }];
   assert.deepEqual(dueScheduledChecks(delayedMidday), morning);
   assert.deepEqual(dueScheduledChecks(delayedMidday, 30, 180), []);
-  const now = new Date("2026-10-01T21:50:00Z");
-  const expected = [{ mode: "curso", scheduledAt: "2026-10-01T19:17:00.000Z" }];
+  const now = new Date("2026-10-06T21:50:00Z");
+  const expected = [cleanup, { mode: "curso", scheduledAt: "2026-10-06T19:17:00.000Z" }];
   assert.deepEqual(dueScheduledChecks(now), expected);
-  const delayed = new Date("2026-10-01T21:59:00Z");
+  const delayed = new Date("2026-10-06T21:59:00Z");
   assert.deepEqual(calendarModes(delayed), []);
   assert.equal(shouldMonitor(delayed), true);
-  const gap = new Date("2026-10-01T15:58:00Z");
+  const gap = new Date("2026-10-06T15:58:00Z");
   assert.deepEqual(dueScheduledChecks(gap, 30, 30), []);
   assert.equal(shouldMonitor(gap, "schedule", 30, 30), false);
   assert.equal(shouldMonitor(gap, "schedule", 30, 1440), true);
-  assert.deepEqual(dueScheduledChecks(new Date("2026-10-01T22:10:00Z")), []);
+  assert.deepEqual(dueScheduledChecks(new Date("2026-10-06T22:10:00Z")), []);
 });
 
 test("un JSON reciente o una ejecucion de otra fuente no ocultan puestos sin revisar", async () => {
   const now = new Date("2026-09-30T14:10:00Z");
-  const checks = dueScheduledChecks(now);
+  const checks = dueScheduledChecks(now).filter(check => check.mode === "puestos");
   const run = { id: 1, status: "completed", conclusion: "success", created_at: "2026-09-30T13:50:00Z" };
   let steps = [{ name: "Actualizar cortes de adjudicaciones", conclusion: "success", started_at: "2026-09-30T13:51:00Z" }];
   const github = { rest: { actions: { listJobsForWorkflowRun: async () => ({ data: { jobs: [{ conclusion: "success", steps }] } }) } } };
@@ -474,10 +481,14 @@ test("un JSON reciente o una ejecucion de otra fuente no ocultan puestos sin rev
   assert.deepEqual(await missedScheduledChecks(github, "owner", "repo", [run], checks, now), checks);
 });
 
-test("recupera una fuente omitida sin cancelar ni repetir otras fuentes", async () => {
+test("recupera las fuentes omitidas y la limpieza sin cancelar otras ejecuciones", async () => {
   setWatchdogEnv();
   const now = new Date("2026-09-30T12:10:00Z");
   const { github, calls } = recoveryGithub(now);
+  github.rest.actions.listJobsForWorkflowRun = async () => ({ data: { jobs: [{ steps: [
+    { name: "Actualizar puestos ofertados", conclusion: "success" },
+    { name: "Retirar difícil cobertura caducada", conclusion: "success" },
+  ] }] } });
   const replacement = { id: 900, created_at: new Date().toISOString(), event: "workflow_dispatch", status: "queued" };
   let scans = 0;
   github.rest.actions.listWorkflowRuns = async () => ({ data: { workflow_runs: ++scans < 3 ? [] : [replacement] } });
@@ -485,7 +496,7 @@ test("recupera una fuente omitida sin cancelar ni repetir otras fuentes", async 
   assert.equal(result.recoverySucceeded, true);
   assert.equal(calls.cancel.length, 0);
   assert.equal(calls.dispatch.length, 1);
-  assert.equal(calls.dispatch[0].inputs.recovery_modes, "puestos");
+  assert.equal(calls.dispatch[0].inputs.recovery_modes, "limpieza_puestos,puestos");
   assert.match(calls.issues[0].body, /Turnos sin comprobacion confirmada/);
 });
 
@@ -537,7 +548,7 @@ test("recupera cada turno de media hora en los picos de publicacion", () => {
     ["2026-10-07", "puestos", [13, 14, 15], [7, 37]],
     ["2026-10-06", "curso", [9, 10, 11, 12, 13, 14], [17, 47]],
     ["2026-10-08", "curso", [9, 10, 11, 12, 13, 14], [17, 47]],
-    ["2026-10-02", "dificil", [13, 14, 15], [20, 50]],
+    ["2026-10-08", "dificil", [13, 14, 15], [20, 50]],
   ];
   for (const [day, mode, hours, minutes] of cases) {
     for (const hour of hours) for (const minute of minutes) {
@@ -547,6 +558,7 @@ test("recupera cada turno de media hora en los picos de publicacion", () => {
     }
   }
   assert.deepEqual(dueScheduledChecks(new Date("2026-12-02T13:52:00Z"), 15), [
+    { mode: "limpieza_puestos", scheduledAt: "2026-12-01T23:20:00.000Z" },
     { mode: "puestos", scheduledAt: "2026-12-02T13:37:00.000Z" },
   ]);
 });

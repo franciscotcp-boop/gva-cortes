@@ -31,9 +31,9 @@ POSITION_SCHEDULE = "20 9,11,13,15,17,19 * 6-7 *"
 ACCREDITATION_SCHEDULE = "20 12,14,16,18,20 * 1-7,9-12 5"
 OFFER_SCHEDULE = "7,37 13-15 * 1-7,9-12 1,3"
 OFFER_LATE_SCHEDULE = "7 9,11,17,19,20 * 1-7,9-12 1,3"
-DIFFICULT_SCHEDULE = "20,50 13-15 * 1-6,9-12 5"
-DIFFICULT_LATE_SCHEDULE = "20 9,11,17,19,21,23 * 1-6,9-12 5"
-CLEANUP_SCHEDULE = "20 0 * 1-6,9-12 6"
+DIFFICULT_SCHEDULE = "20,50 13-15 * 1-6,9-12 4"
+DIFFICULT_LATE_SCHEDULE = "20 9,11,17,19,21,23 * 1-6,9-12 4"
+CLEANUP_SCHEDULE = "20 0 * 1-6,9-12 *"
 
 EXPLICIT_SCHEDULES = {
     START_SCHEDULE: "inicio",
@@ -81,12 +81,12 @@ def scheduled_modes(value: datetime) -> tuple[str, ...]:
     if offers_in_season and weekday in {1, 3} and hour in OFFER_HOURS:
         modes.append("puestos")
 
-    # Difícil cobertura: viernes de septiembre a junio, hasta las 23:20.
-    if month not in {7, 8} and weekday == 5 and hour in DIFFICULT_HOURS:
+    # Difícil cobertura: jueves de septiembre a junio, hasta las 23:20.
+    if month not in {7, 8} and weekday == 4 and hour in DIFFICULT_HOURS:
         modes.append("dificil")
 
-    # Las ofertas de difícil cobertura caducan al terminar el viernes.
-    if month not in {7, 8} and weekday == 6 and hour == 0:
+    # Limpieza local diaria: cubre tambien publicaciones manuales excepcionales.
+    if month not in {7, 8} and hour == 0:
         modes.append("limpieza_puestos")
 
     return tuple(modes)

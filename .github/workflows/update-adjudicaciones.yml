@@ -52,13 +52,13 @@ on:
       timezone: "Europe/Madrid"
     - cron: "7 9,11,17,19,20 * 1-7,9-12 1,3"
       timezone: "Europe/Madrid"
-    # Dificil cobertura: viernes, con vigilancia reforzada alrededor de las 14:00.
-    - cron: "20,50 13-15 * 1-6,9-12 5"
+    # Dificil cobertura: jueves, con vigilancia reforzada alrededor de las 14:00.
+    - cron: "20,50 13-15 * 1-6,9-12 4"
       timezone: "Europe/Madrid"
-    - cron: "20 9,11,17,19,21,23 * 1-6,9-12 5"
+    - cron: "20 9,11,17,19,21,23 * 1-6,9-12 4"
       timezone: "Europe/Madrid"
-    # Retirada de dificil cobertura al comenzar el sabado.
-    - cron: "20 0 * 1-6,9-12 6"
+    # Retirada al cambiar el dia, sin consultar Conselleria; incluye excepciones.
+    - cron: "20 0 * 1-6,9-12 *"
       timezone: "Europe/Madrid"
 
 permissions:

@@ -172,7 +172,7 @@ def is_offered_positions_pdf(link: dict[str, str]) -> bool:
         return False
     filename = normalized(candidate_filename(link))
     combined = normalized(f"{filename} {link.get('text', '')}")
-    if re.search(r"(?:^|[^a-z0-9])pue[^a-z0-9]+prov(?:[^a-z0-9]|$)", filename):
+    if re.search(r"(?:^|[^a-z0-9])pue[^a-z0-9]+(?:prov|def)(?:[^a-z0-9]|$)", filename):
         return True
     if "puestos" in combined and any(
         word in combined for word in ("ofertados", "ofertats", "oferts")
@@ -831,7 +831,7 @@ def update_from_page(
         if (hint := document_date_hint(link))
         and academic_year_for_document(hint) == target_year
     ]
-    if kind != "difficult" and candidates and (target_hints or errors):
+    if candidates and (errors or (kind != "difficult" and target_hints)):
         raise SourceValidationError(
             "No se ha podido procesar el PDF mas reciente de puestos ofertados: "
             + " | ".join(errors or ["documento no valido"])
