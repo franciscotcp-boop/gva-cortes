@@ -1108,6 +1108,7 @@ PROGRAM_NOTES = {
     "277": "\u00c1mbito Socioling\u00fc\u00edstico / \u00c0mbit Socioling\u00fc\u00edstic",
     "292": "FPA Cient\u00edfico/Tecnol\u00f3gico / FPA Cient\u00edfic/Tecnol\u00f2gic",
     "293": "FPA Ciencias Sociales / FPA Ci\u00e8ncies Socials",
+    "294": "FPA Comunicaci\u00f3n (Ingl\u00e9s) / FPA Comunicaci\u00f3 (Angl\u00e9s)",
     "295": "FPA Comunicaci\u00f3n (Valenciano/Ingl\u00e9s) / FPA Comunicaci\u00f3 (Valenci\u00e0/Angl\u00e9s)",
     "297": "FPA Comunicaci\u00f3n (Valenciano) / FPA Comunicaci\u00f3 (Valenci\u00e0)",
 }

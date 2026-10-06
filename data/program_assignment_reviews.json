@@ -139,6 +139,29 @@
           "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
         }
       ]
+    },
+    "e5d16a962539b1d359f94257be1ee74b2948d547717e7d4c15ff450111764c1f": {
+      "source_date": "2026-10-06",
+      "source_url": "https://ceice.gva.es/documents/162909733/415637604/261006_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "600296",
+          "candidate_name": "SODRIC GOLMAYO, ISABEL",
+          "center_code": "03012888",
+          "specialty_code": "204",
+          "post_specialty_code": "294",
+          "observations": "294 / FPA Comunicaci\u00f3n (Ingl\u00e9s) / FPA Comunicaci\u00f3 (Angl\u00e9s)"
+        },
+        {
+          "slot_id": "838791",
+          "candidate_name": "FERRI COBALLES, ALICIA",
+          "center_code": "03010478",
+          "specialty_code": "219",
+          "post_specialty_code": "276",
+          "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
+        }
+      ]
     }
   }
 }

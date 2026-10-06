@@ -591,6 +591,39 @@ PROFESSORS D'ENSENYAMENT SECUNDARI
             self.assertEqual(report["run_attempt"], "2")
             self.assertEqual(report["cases"], cases)
 
+    def test_fpa_294_uses_unique_pool_and_preserves_placement_details(self) -> None:
+        block = ["122 PIERA VIVAS, MARIA DOLORES Voluntaria",
+                 "767286 PICASSENT(46023951)CENTRE PUBLIC FPA PRESENTACION SAEZ",
+                 "294 / FPA COMUNICACIO (ANGLES)",
+                 "Jornada completa / ING. SUBSTITUCIO DETERMINADA Adjudicat"]
+        post = updater.parse_block(block, "secundaria", ("211", "ANGLES"), require_matching_specialty=False)
+        status = updater.parse_status_block(block, "secundaria", ("211", "ANGLES"))
+        resolved = updater.resolve_program_assignments([post], [status], {"211": "ANGLES"})
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual((resolved[0].specialty_code, resolved[0].cut, resolved[0].post_specialty_code), ("211", 122, "294"))
+        self.assertEqual((resolved[0].placement_type, resolved[0].workload), ("sub_determinada", "C"))
+        self.assertTrue(resolved[0].english_requirement)
+        self.assertIn("294 FPA", resolved[0].observations)
+
+    def test_fpa_294_requires_review_when_two_pools_are_awarded(self) -> None:
+        block = ["174 SODRIC GOLMAYO, ISABEL Voluntaria",
+                 "600296 ALACANT(03012888)CENTRE PUBLIC FPA F. GINER DE LOS RIOS",
+                 "294 / FPA COMUNICACIO (ANGLES)", "Jornada completa / ING. VACANT Adjudicat"]
+        post = updater.parse_block(block, "secundaria", ("211", "ANGLES"), require_matching_specialty=False)
+        statuses = [updater.StatusRecord(rank, post.candidate_name, code, "A") for code, rank in (("204", 161), ("211", 174))]
+        headers = {"204": "CASTELLANO", "211": "ANGLES"}
+        with self.assertRaises(updater.ProgramReviewRequired) as caught:
+            updater.resolve_program_assignments([post], statuses, headers)
+        self.assertEqual(caught.exception.cases[0]["slot_id"], "600296")
+        self.assertEqual(len(caught.exception.cases[0]["candidate_pools"]), 2)
+        for code, rank in (("204", 161), ("211", 174)):
+            review = {"600296": {"slot_id": "600296", "candidate_name": post.candidate_name,
+                      "center_code": "03012888", "specialty_code": code,
+                      "post_specialty_code": "294", "observations": "294 FPA"}}
+            result = updater.resolve_program_assignments([post], statuses, headers, review)
+            self.assertEqual((result[0].specialty_code, result[0].cut), (code, rank))
+            self.assertEqual(result[0].placement_type, "vacante")
+
     def test_fpa_295_uses_unique_english_pool_and_keeps_its_requirement(self) -> None:
         block = ["57 HERNANDEZ BERTO, ANA Voluntaria",
                  "769157 ALACANT(03012891)CENTRE PUBLIC FPA PROFESOR ALBERTO BARRIOS",
