@@ -162,6 +162,29 @@
           "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
         }
       ]
+    },
+    "b1fdc617cf16fba9e062f5ed59e8a88981795b2c27bd5f04e8b4225562175d92": {
+      "source_date": "2026-10-08",
+      "source_url": "https://ceice.gva.es/documents/162909733/415637604/261008_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "924583",
+          "candidate_name": "SANCHEZ SORROCHE, ALBA",
+          "center_code": "03014460",
+          "specialty_code": "256",
+          "post_specialty_code": "277",
+          "observations": "277 / \u00c1mbito Socioling\u00fc\u00edstico / \u00c0mbit Socioling\u00fc\u00edstic"
+        },
+        {
+          "slot_id": "914159",
+          "candidate_name": "IBA\u00d1EZ MU\u00d1OZ, JUAN CARLOS",
+          "center_code": "46022233",
+          "specialty_code": "219",
+          "post_specialty_code": "276",
+          "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
+        }
+      ]
     }
   }
 }
