@@ -15,6 +15,8 @@ URLS = (
     'https://ceice.gva.es/es/web/rrhh-educacion/convocatoria-y-peticion-telematica',
     'https://ceice.gva.es/es/web/rrhh-educacion/resolucion',
     'https://ceice.gva.es/documents/162909733/415637604/261015_pue_prov.pdf',
+    'https://sede.gva.es/va/cercador-persones',
+    'https://www.gva.es/',
 )
 HEADERS = {'User-Agent': 'AdjudicApp/1.0 (+https://github.com/franciscotcp-boop/gva-cortes)',
            'Accept': 'text/html,application/pdf,application/octet-stream;q=0.9,*/*;q=0.5'}
@@ -77,7 +79,31 @@ def main():
                     record.update(inspect_response(output.read_bytes(), None))
                 report['requests'].append(record)
                 print(json.dumps(record), flush=True)
+        # Compare ports without fetching or publishing any unencrypted content.
+        for address in report.get('dns', []):
+            started = time.monotonic()
+            record = {'method': 'tcp-port-80', 'address': address}
+            try:
+                with socket.create_connection((address, 80), timeout=10):
+                    record['connected'] = True
+            except OSError as exc:
+                record.update(connected=False, error=str(exc))
+            record['seconds'] = round(time.monotonic() - started, 2)
+            report['requests'].append(record)
+            print(json.dumps(record), flush=True)
+    report['official_sources_reachable'] = all(
+        record.get('status') == 200 for record in report['requests'][:3])
     Path('source-access-report.json').write_text(json.dumps(report, indent=2), encoding='utf8')
+    if not report['official_sources_reachable']:
+        print('::warning::Diagnostico completado, pero el acceso a Conselleria NO funciona.')
+    summary = os.environ.get('GITHUB_STEP_SUMMARY')
+    if summary:
+        result = ('Acceso correcto a las tres fuentes probadas.'
+                  if report['official_sources_reachable'] else
+                  'Acceso fallido a una o mas fuentes. Esta prueba no ha solucionado el acceso.')
+        with open(summary, 'a', encoding='utf8') as stream:
+            stream.write(f'## Resultado del acceso a Conselleria\n\n{result}\n\n'
+                         'No se han publicado ni modificado datos de AdjudicApp.\n')
 
 
 if __name__ == '__main__':
