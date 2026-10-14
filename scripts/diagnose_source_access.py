@@ -61,6 +61,22 @@ def main():
                 record.update(inspect_response(output.read_bytes(), None))
             report['requests'].append(record)
             print(json.dumps(record), flush=True)
+            # Both addresses were returned by official-host DNS during this incident.
+            # Preserve the HTTPS hostname and certificate verification in every probe.
+            for address in ('195.77.20.69', '195.77.19.36'):
+                if address in report.get('dns', []):
+                    continue
+                if output.exists():
+                    output.unlink()
+                resolved = args[:-1] + ['--resolve', f'ceice.gva.es:443:{address}', URLS[0]]
+                completed = subprocess.run(resolved, capture_output=True, text=True, timeout=35)
+                record = {'method': 'curl-official-address', 'address': address, 'url': URLS[0],
+                          'returncode': completed.returncode, 'timings': completed.stdout,
+                          'error': completed.stderr}
+                if output.exists():
+                    record.update(inspect_response(output.read_bytes(), None))
+                report['requests'].append(record)
+                print(json.dumps(record), flush=True)
     Path('source-access-report.json').write_text(json.dumps(report, indent=2), encoding='utf8')
 
 
