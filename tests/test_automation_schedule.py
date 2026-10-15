@@ -238,6 +238,14 @@ class AutomationScheduleTests(unittest.TestCase):
             self.assertIn(f'- cron: "{expression}"\n      timezone: "Europe/Madrid"', workflow)
         self.assertEqual(workflow.count("- cron:"), len(EXPLICIT_SCHEDULES))
 
+    def test_queued_updater_checks_out_current_branch_not_event_commit(self) -> None:
+        workflow = (ROOT / ".github/workflows/update-adjudicaciones.yml").read_text(encoding="utf8")
+        checkout = workflow.split("uses: actions/checkout@v6", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("ref: ${{ github.event.repository.default_branch }}", checkout)
+        self.assertIn("group: actualizar-adjudicaciones", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertNotIn("git push --force", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
