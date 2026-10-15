@@ -44,8 +44,11 @@ The actual Android event detector changes only `continuous_results` and
 The previously owner-confirmed separate identities DEL ARCO VICENT and DEL ARCO
 VICENTE remain separate. A new non-awarded participant, TENA MARTINEZ, AIDA
 (general position 3275, participated), is not automatically merged with the
-initial Infantil profile MARTINEZ TENA, AIDA (initial position 4857). This surname
-order discrepancy has been referred to the owner. No awarded profile is missing.
+initial Infantil profile MARTINEZ TENA, AIDA (initial position 4857). On October 15
+the owner explicitly confirmed that these identities must remain separate.
+Do not transfer general position 3275 to the initial Infantil profile or infer
+a specialty for TENA MARTINEZ, AIDA from the other person's record. No awarded
+profile is missing.
 
 ## Failed Queued Run
 
