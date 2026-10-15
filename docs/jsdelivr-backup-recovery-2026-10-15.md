@@ -25,6 +25,20 @@ The cutoff backup has recovered: the existing jsDelivr URL for
 Both primary URLs remain valid. At the final check in this review, the positions
 backup was still invalid and must not be reported as repaired.
 
+## Upstream Report
+
+With the owner's explicit authorization, issue
+https://github.com/jsdelivr/jsdelivr/issues/18754 was opened on October 15 at
+14:26 UTC. It includes public file URLs, response headers, file sizes and hashes;
+no teacher names, dataset records or credentials were copied into the report.
+A fresh check at 14:25 UTC still returned the 199-byte error body as HTTP 200.
+
+The published WordPress/CodePen page was also checked directly after the report:
+the position search loaded successfully and a profile with an October 15
+continuous award displayed its center, workload and program observations.
+No Android phone was used in this follow-up check; both shipped clients consume
+the same primary dataset, whose content was verified independently.
+
 ## Reusable Check
 
 Run `python scripts/verify_public_backups.py` against the current validated

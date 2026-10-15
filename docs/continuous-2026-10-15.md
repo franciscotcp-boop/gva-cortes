@@ -49,6 +49,10 @@ the owner explicitly confirmed that these identities must remain separate.
 Do not transfer general position 3275 to the initial Infantil profile or infer
 a specialty for TENA MARTINEZ, AIDA from the other person's record. No awarded
 profile is missing.
+The owner subsequently confirmed that TENA MARTINEZ, AIDA cannot be located in
+her initial pool and explicitly requested leaving her without a personal profile
+for now. Preserve the existing MARTINEZ TENA, AIDA profile unchanged; do not add
+a placeholder or merge the identities based on their neighboring list entries.
 
 ## Failed Queued Run
 
