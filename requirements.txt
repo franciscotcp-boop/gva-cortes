@@ -3,3 +3,5 @@ pypdf>=5,<7
 pypdfium2>=4,<5
 pytesseract>=0.3.13,<0.4
 Pillow>=10,<13
+requests>=2.32,<3
+tzdata>=2026.1; sys_platform == "win32"

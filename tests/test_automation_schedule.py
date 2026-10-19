@@ -246,6 +246,15 @@ class AutomationScheduleTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertNotIn("git push --force", workflow)
 
+    def test_backup_http_dependency_is_installed_before_validation(self) -> None:
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf8")
+        self.assertIn("requests>=2.32,<3", requirements.splitlines())
+        workflow = (ROOT / ".github/workflows/update-adjudicaciones.yml").read_text(encoding="utf8")
+        self.assertLess(
+            workflow.index("python -m pip install -r requirements.txt"),
+            workflow.index("python -m unittest discover -s tests -v"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
