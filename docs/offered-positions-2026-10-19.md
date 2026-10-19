@@ -24,3 +24,19 @@ so the same tests run in a clean Windows environment.
 Verification: all 185 tests pass in a fresh virtual environment installed
 only from the repository requirements; `pip check` reports no broken requirements.
 This fixes the dependency failure, not any independent remote-network restriction.
+
+## Live verification
+
+- Commit: `9e15bbbce6bfcc09c22337d2948c5aa0bcf4d490`.
+- GitHub run 1817 (`39252596440`) completed successfully on 19 October.
+  It passed all 185 tests, fetched the official source and returned `unchanged`
+  for `261020_pue_prov.pdf`, ordinary snapshot 20 October, 334 items.
+  No duplicate publication or extra notification fingerprint was generated.
+- Primary public JSON matched the complete staged payload, with CORS `*`.
+- The existing embedded CodePen on the published WordPress page loaded the new
+  offer date and returned Infantil posts ordered from Elx/Elche, including
+  hours, English requirements, itinerancy, compositions and observations.
+- The unchanged Android 1.8.4 importer displayed all 334 items on both 19 and
+  20 October. Its actual Java event detector produced a new `continuous_offers`
+  event on 19 October; all other notification events stayed unchanged.
+  This is not a claim of physical notification delivery to every device.
