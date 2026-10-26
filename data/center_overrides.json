@@ -29,6 +29,13 @@
       "url": "https://sede.gva.es/es/detall-departament?id_dept=23200",
       "map_url": "https://sede.gva.es/mapa?lng=-0.13755&lat=40.0607&dept=23200",
       "checked_date": "2026-09-07"
+    },
+    "46900080": {
+      "url": "https://sede.gva.es/es/detall-departament?id_dept=23240",
+      "contact_url": "https://centroresidenciascheste.es/galeria/",
+      "map_url": "https://sede.gva.es/mapa?lng=-0.6427&lat=39.4828&dept=23240",
+      "checked_date": "2026-10-26",
+      "location_note": "Coordenadas del directorio oficial de la Generalitat para el centro residencial."
     }
   },
   "centers": [
@@ -481,6 +488,24 @@
       "Alacant/Alicante",
       37.9332774,
       -0.7513638
+    ],
+    [
+      "46900080",
+      "Centro Residencial de Cheste",
+      "Centro Residencial",
+      "Centre Residencial",
+      "Público",
+      "CRTA. VALÈNCIA-CHESTE, S/N (EDIFICI R4)",
+      "46380",
+      "961839018",
+      "46900080.secretaria@edu.gva.es",
+      "https://centroresidenciascheste.es/",
+      "",
+      "Cheste",
+      "La Hoya de Buñol",
+      "València/Valencia",
+      39.4828,
+      -0.6427
     ]
   ]
 }
