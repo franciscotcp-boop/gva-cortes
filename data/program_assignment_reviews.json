@@ -1,6 +1,21 @@
 {
   "schema_version": 1,
   "documents": {
+    "fb286c04ab8576c86fdaebea0051052cd778064946214f03c37f93fc06a5848e": {
+      "source_date": "2026-10-27",
+      "source_url": "https://ceice.gva.es/documents/162909733/415637604/261027_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "600072",
+          "candidate_name": "PEREZ ESCRIBANO, CARLOS",
+          "center_code": "46017195",
+          "specialty_code": "219",
+          "post_specialty_code": "276",
+          "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
+        }
+      ]
+    },
     "9e8bacd93c1d02f8918f872dddd673db23dada3db9f3f5e66b8ec79e868de741": {
       "source_date": "2026-09-29",
       "source_url": "https://ceice.gva.es/documents/162909733/414354213/260929_lis_sec.pdf",
