@@ -1,6 +1,21 @@
 {
   "schema_version": 1,
   "documents": {
+    "5b18dcb0a40a39b22e7f33398f35d3bd8d12ec7bedc0cf98bcf0516ff8eb4ae8": {
+      "source_date": "2026-10-29",
+      "source_url": "https://ceice.gva.es/documents/162909733/415637604/261029_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "871070",
+          "candidate_name": "MARTINEZ GINER, FRANCISCO JAVIER",
+          "center_code": "03008423",
+          "specialty_code": "256",
+          "post_specialty_code": "277",
+          "observations": "277 / \u00c1mbito Socioling\u00fc\u00edstico / \u00c0mbit Socioling\u00fc\u00edstic"
+        }
+      ]
+    },
     "fb286c04ab8576c86fdaebea0051052cd778064946214f03c37f93fc06a5848e": {
       "source_date": "2026-10-27",
       "source_url": "https://ceice.gva.es/documents/162909733/415637604/261027_lis_sec.pdf",

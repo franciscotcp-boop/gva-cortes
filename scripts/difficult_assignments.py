@@ -205,7 +205,47 @@ def make_directory_review_ledger(reviews, offers, positions, assignment_date, so
     return ledger
 
 
-def preserve_ledger(positions, data_directory):
+def _official_history_by_person(positions, history):
+    """Do not trust historical array indexes without checking name and pool identity."""
+    result = defaultdict(list)
+    if history.get("academic_year", "").replace("-", "/") != positions.get("academic_year", "").replace("-", "/"):
+        return result
+    people = positions.get("people", [])
+    fields = history.get("assignment_fields", [])
+    for values in history.get("assignments", []):
+        row = dict(zip(fields, values))
+        index = row.get("person_index")
+        if not isinstance(index, int) or not 0 <= index < len(people):
+            continue
+        person = people[index]
+        if (normalized_name(row.get("candidate_name")) != normalized_name(person[1]) or
+                row.get("initial_order") is None or
+                not any(str(entry[0]) == str(row.get("specialty_code")) and entry[1] == row["initial_order"]
+                        for entry in person[2])):
+            continue
+        if row.get("mode") in {"inicio", "curso"} and row.get("published_date"):
+            result[id(person)].append(row)
+    return result
+
+
+def _has_later_official_award(award, people, history_by_person):
+    ended = award.get("profile_resolution", {}).get("superseded_ordinary_assignments", [])
+    for person in people:
+        for row in history_by_person.get(id(person), []):
+            if row["published_date"] < award["date"]:
+                continue
+            detail = ["C" if row["mode"] == "curso" else "I", row["published_date"],
+                      str(row.get("placement_type") or ""), row.get("workload"),
+                      str(row.get("center_code") or ""), row.get("english_requirement") is True,
+                      row.get("itinerant") is True, str(row.get("center_name") or ""),
+                      str(row.get("locality") or ""), str(row.get("observations") or "")]
+            if not any(str(item["specialty_code"]) == str(row["specialty_code"]) and item["detail"] == detail
+                       for item in ended):
+                return True
+    return False
+
+
+def preserve_ledger(positions, data_directory, history=None):
     path = Path(data_directory) / "difficult_assignments.json"
     if path.exists():
         ledger = json.loads(path.read_text(encoding="utf-8"))
@@ -213,12 +253,19 @@ def preserve_ledger(positions, data_directory):
             positions.pop("difficult_assignments", None)
             return
         _apply_confirmed_profile_resolutions(positions, ledger)
+        if history is None:
+            history_path = Path(data_directory) / "position_context_state.json"
+            history = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else {}
+        history_by_person = _official_history_by_person(positions, history)
         # Official assignments supersede emergency directory evidence, regardless of PDF date.
+        # A later ordinary award must not revive an old DC destination when it ends.
         by_name = _people_by_name(positions)
         ledger["awards"] = [award for award in ledger.get("awards", [])
                             if not (award.get("verification", {}).get("assignment_inference") and
-                                    any(len(entry) > 8 and entry[8] == "A"
-                                        for person in _award_people(positions, award, by_name) for entry in person[2]))]
+                                    (any(len(entry) > 8 and entry[8] == "A"
+                                         for person in _award_people(positions, award, by_name) for entry in person[2]) or
+                                     _has_later_official_award(award, _award_people(positions, award, by_name),
+                                                               history_by_person)))]
         attach_ledger(positions, ledger)
 
 

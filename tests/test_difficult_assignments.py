@@ -251,6 +251,88 @@ class DifficultAssignmentsTest(unittest.TestCase):
             self.assertEqual(saved["people"][0][2][0][8:], ["N", None])
             self.assertEqual(json.loads(updater.state_path.read_text(encoding="utf8")), updater.state)
 
+    def history_fixture(self, positions):
+        entry = positions["people"][0][2][0]
+        detail = entry[9]
+        row = {"person_index": 0, "candidate_name": positions["people"][0][1],
+               "specialty_code": entry[0], "initial_order": entry[1], "mode": "curso",
+               "published_date": detail[1], "placement_type": detail[2], "workload": detail[3],
+               "center_code": detail[4], "english_requirement": detail[5], "itinerant": detail[6],
+               "center_name": detail[7], "locality": detail[8], "observations": detail[9]}
+        return {"academic_year": "2026-2027", "assignment_fields": list(row), "assignments": [list(row.values())]}
+
+    def test_ended_later_ordinary_award_never_revives_old_directory_destination(self):
+        positions, ledger = self.resolved_fixture()
+        ledger["awards"][0].pop("profile_resolution")
+        history = self.history_fixture(positions)
+        positions["people"][0][2][0][8:] = ["P", None]
+        before = copy.deepcopy(positions["people"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "difficult_assignments.json"
+            path.write_text(json.dumps(ledger), encoding="utf8")
+            (Path(directory) / "position_context_state.json").write_text(json.dumps(history), encoding="utf8")
+            for _ in range(2):
+                preserve_ledger(positions, directory)
+                self.assertEqual(positions["difficult_assignments"]["awards"], [])
+            self.assertEqual(json.loads(path.read_text(encoding="utf8")), ledger)
+        self.assertEqual(positions["people"], before)
+
+    def test_history_preserves_exact_owner_override_but_not_another_later_award(self):
+        for changed in (False, True):
+            positions, ledger = self.resolved_fixture()
+            history = self.history_fixture(positions)
+            if changed:
+                history["assignments"][0][history["assignment_fields"].index("center_code")] = "03099999"
+            positions["people"][0][2][0][8:] = ["P", None]
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+                preserve_ledger(positions, directory, history=history)
+                self.assertEqual(len(positions["difficult_assignments"]["awards"]), 0 if changed else 1)
+
+    def test_history_requires_same_year_name_pool_and_person(self):
+        for field, value in [("candidate_name", "OTHER PERSON"), ("initial_order", 999),
+                             ("initial_order", None), ("person_index", 99), ("person_index", -1),
+                             ("specialty_code", "128"), ("published_date", "2026-09-01"),
+                             ("mode", "difficult")]:
+            positions, ledger = self.resolved_fixture()
+            ledger["awards"][0].pop("profile_resolution")
+            history = self.history_fixture(positions)
+            history["assignments"][0][history["assignment_fields"].index(field)] = value
+            positions["people"][0][2][0][8:] = ["P", None]
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+                preserve_ledger(positions, directory, history=history)
+                self.assertEqual(len(positions["difficult_assignments"]["awards"]), 1)
+        positions, ledger = self.resolved_fixture()
+        ledger["awards"][0].pop("profile_resolution")
+        history = self.history_fixture(positions)
+        history["academic_year"] = "2025/2026"
+        positions["people"][0][2][0][8:] = ["P", None]
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+            preserve_ledger(positions, directory, history=history)
+            self.assertEqual(len(positions["difficult_assignments"]["awards"]), 1)
+
+    def test_save_uses_new_history_not_the_previous_file(self):
+        from position_context import PositionContextUpdater
+        positions, ledger = self.resolved_fixture()
+        ledger["awards"][0].pop("profile_resolution")
+        history = self.history_fixture(positions)
+        positions["people"][0][2][0][8:] = ["P", None]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+            updater = PositionContextUpdater.__new__(PositionContextUpdater)
+            updater.enabled = updater.dirty = True
+            updater.positions = positions
+            updater.positions_path = root / "posiciones_bolsa.json"
+            updater.state_path = root / "position_context_state.json"
+            updater.state_path.write_text("{}", encoding="utf8")
+            updater.state = history
+            self.assertTrue(updater.save())
+            self.assertEqual(json.loads(updater.positions_path.read_text(encoding="utf8"))["difficult_assignments"]["awards"], [])
+            self.assertEqual(json.loads(updater.state_path.read_text(encoding="utf8")), history)
+
 
 if __name__ == "__main__":
     unittest.main()
