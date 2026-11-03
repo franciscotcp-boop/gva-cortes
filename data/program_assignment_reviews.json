@@ -1,6 +1,21 @@
 {
   "schema_version": 1,
   "documents": {
+    "847dcc1233a91b5694d1738f75ddd09e536d6764638ba87e89ab7f714510b348": {
+      "source_date": "2026-11-03",
+      "source_url": "https://ceice.gva.es/documents/162909733/416766492/261103_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "600210",
+          "candidate_name": "DIAZ-CANO VARGAS, MARIA ANGELES",
+          "center_code": "46000705",
+          "specialty_code": "207",
+          "post_specialty_code": "276",
+          "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
+        }
+      ]
+    },
     "5b18dcb0a40a39b22e7f33398f35d3bd8d12ec7bedc0cf98bcf0516ff8eb4ae8": {
       "source_date": "2026-10-29",
       "source_url": "https://ceice.gva.es/documents/162909733/415637604/261029_lis_sec.pdf",
