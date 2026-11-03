@@ -14,13 +14,15 @@ Los lectores aceptan un documento nuevo solo despues de identificar su cuerpo, c
 
 ## Calendario de Madrid
 
-- Inicio de curso: julio y agosto, de lunes a sabado, a las 09:00, 12:00, 15:00, 18:00 y 21:00.
-- Durante el curso: martes y jueves del 1 de septiembre al 30 de junio, a las 09:00, 12:00, 15:00, 18:00 y 21:00.
-- Posiciones anuales: todos los dias del 1 de junio al 31 de julio, a las 09:00, 11:00, 13:00, 15:00, 17:00 y 19:00.
-- Acreditaciones de ingles: todos los viernes del 1 de septiembre al 31 de julio, a las 12:00, 14:00, 16:00, 18:00 y 20:00.
-- Puestos ofertados: lunes y miercoles del 1 de septiembre al 1 de julio, a las 09:00, 11:00, 13:00, 15:00, 17:00 y 19:00.
+- Inicio de curso: julio y agosto, de lunes a sabado, a las 09:20, 12:20, 15:20, 18:20 y 21:20.
+- Durante el curso: martes y jueves del 1 de septiembre al 30 de junio, cada media hora de 09:17 a 14:47, mas 15:17, 18:17 y 21:17.
+- Posiciones anuales: todos los dias del 1 de junio al 31 de julio, a las 09:20, 11:20, 13:20, 15:20, 17:20 y 19:20.
+- Acreditaciones de ingles: todos los viernes del 1 de septiembre al 31 de julio, a las 12:20, 14:20, 16:20, 18:20 y 20:20.
+- Puestos ofertados: lunes y miercoles del 1 de septiembre al 1 de julio, cada media hora de 13:07 a 15:37, mas 09:07, 11:07, 17:07, 19:07 y 20:07.
+- Dificil cobertura: jueves del 1 de septiembre al 30 de junio, cada media hora de 13:20 a 15:50, mas 09:20, 11:20, 17:20, 19:20, 21:20 y 23:20.
+- Limpieza de dificil cobertura caducada: diariamente a las 00:20, de septiembre a junio, sin consultar Conselleria.
 
-El cron usa una ventana UTC amplia. `scripts/automation_schedule.py` aplica despues la fecha y hora exactas en `Europe/Madrid`, incluido el cambio de hora.
+El workflow principal expresa sus turnos en `Europe/Madrid`, incluido el cambio de hora. `scripts/automation_schedule.py` reconoce la fuente aunque el evento llegue tarde, hasta 24 horas despues. No reabre temporadas cerradas ni recupera dificil cobertura caducada. GitHub puede retrasar u omitir eventos; estos horarios son los programados, no una garantia de entrega puntual.
 
 ## Datos mantenidos
 
@@ -45,16 +47,19 @@ La publicacion conserva las URL y el esquema que consumen CodePen y Android. Por
 
 ## Vigilante
 
-El workflow `Vigilar adjudicaciones` se activa al terminar el workflow principal y tambien tiene una revision programada cada 15 minutos dentro de una ventana horaria amplia. Las revisiones programadas aplican el calendario de Madrid; los avisos de finalizacion se revisan aunque GitHub los entregue fuera del turno.
+El workflow `Vigilar adjudicaciones` se activa al terminar el workflow principal, al publicar cambios de automatizacion y cada 15 minutos (minutos 03, 18, 33 y 48 UTC). Aplica el calendario de Madrid y revisa las ultimas 24 horas, tambien despues de medianoche. El pulso del vigilante no implica consultar todas las fuentes en cada ejecucion.
 
-- Cancela una ejecucion que lleve mas de 30 minutos bloqueada.
+- Cancela una ejecucion que lleve mas de 40 minutos bloqueada; respeta el limite de 35 minutos del procesamiento principal.
 - Detecta el primer fallo del workflow principal, incluidos errores de acceso a la Conselleria.
-- Realiza un solo intento de recuperacion con las fuentes que se intentaron en la ejecucion original, identificadas por sus pasos. No cambia de fuente si la recuperacion comienza en otra hora.
+- Recupera las fuentes fallidas o los turnos omitidos con 15 minutos de margen. Comprueba el exito de cada fuente, no solo el color verde del workflow. Una fuente ya comprobada no se vuelve a recuperar.
+- Si dificil cobertura fallo y ya cambio el dia de Madrid, recupera la limpieza en lugar de volver a publicar puestos caducados.
 - Crea una incidencia asignada al propietario para activar el aviso por correo e informa del resultado.
-- Mientras exista una incidencia abierta no encadena nuevos reintentos; una ejecucion posterior correcta cierra la alerta.
+- Tras un intento fallido, espera 60 minutos antes del siguiente. Una incidencia abierta no bloquea indefinidamente los reintentos; una recuperacion verificada cierra la alerta.
 - `generated_at` es informativo y no provoca falsas alarmas cuando no hay documentos nuevos.
 
 El vigilante solo tiene permisos de lectura sobre los datos. Puede administrar Actions e incidencias, pero no puede modificar la web, la app ni los JSON.
+
+Diagnostico y limites de la programacion: [revision del 03/11/2026](docs/automation-recovery-2026-11-03.md). Un resultado manual correcto no demuestra que el siguiente evento programado vaya a llegar a tiempo.
 
 ## Ejecucion manual
 

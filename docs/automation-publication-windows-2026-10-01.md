@@ -1,5 +1,9 @@
 # Publication windows and recovery
 
+Historical change note. The watchdog clock and midnight recovery described
+below were superseded by [the November 3 correction](automation-recovery-2026-11-03.md).
+The publication windows in the table remain unchanged.
+
 All times below are Europe/Madrid. GitHub owns the automation; this change
 does not add a Codeberg or Codex scheduler and does not change the clients.
 
