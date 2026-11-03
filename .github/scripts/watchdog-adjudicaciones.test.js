@@ -244,7 +244,7 @@ test("el informe contiene bloqueo, cancelacion, relanzamiento y resultado", () =
 
 test("simula cancelacion, relanzamiento y recuperacion correcta", async () => {
   setWatchdogEnv();
-  const now = new Date();
+  const now = new Date("2026-11-03T15:00:00Z");
   const { github, calls } = recoveryGithub(now, "success");
   const core = fakeCore();
   const manualContext = context();
@@ -270,7 +270,7 @@ test("simula cancelacion, relanzamiento y recuperacion correcta", async () => {
 
 test("simula una recuperacion fallida y deja una alerta abierta", async () => {
   setWatchdogEnv();
-  const now = new Date();
+  const now = new Date("2026-11-03T15:00:00Z");
   const { github, calls } = recoveryGithub(now, "failure");
   const core = fakeCore();
   const manualContext = context();
@@ -315,7 +315,7 @@ test("el evento de finalizacion activa la recuperacion fuera del calendario", as
 
 test("espera si tras un fallo ya hay una ejecucion reciente en marcha", async () => {
   setWatchdogEnv();
-  const now = new Date();
+  const now = new Date("2026-11-03T15:00:00Z");
   const manualContext = context();
   manualContext.eventName = "workflow_dispatch";
   const calls = { cancel: [], dispatch: [], issues: [] };
@@ -387,7 +387,7 @@ test("espera si tras un fallo ya hay una ejecucion reciente en marcha", async ()
 
 test("confirma por correo una recuperacion que termino despues del primer aviso", async () => {
   setWatchdogEnv();
-  const now = new Date();
+  const now = new Date("2026-11-03T15:00:00Z");
   const calls = { comments: [], issueUpdates: [] };
   const github = {
     rest: {
@@ -628,7 +628,7 @@ test("recupera cada turno de media hora en los picos de publicacion", () => {
 
 test("una incidencia reciente espera la pausa sin despachar otra ejecucion", async () => {
   setWatchdogEnv();
-  const now = new Date();
+  const now = new Date("2026-11-03T15:00:00Z");
   const { github, calls } = recoveryGithub(now);
   const failure = { id: 1, status: "completed", conclusion: "failure", created_at: isoMinutesBefore(now, 20) };
   github.rest.actions.listWorkflowRuns = async () => ({ data: { workflow_runs: [failure] } });
@@ -645,7 +645,7 @@ test("una incidencia reciente espera la pausa sin despachar otra ejecucion", asy
 
 test("una alerta abierta no bloquea indefinidamente la recuperacion", async () => {
   setWatchdogEnv();
-  const now = new Date();
+  const now = new Date("2026-11-03T15:00:00Z");
   const { github, calls } = recoveryGithub(now);
   const incident = { number: 12, title: "[AdjudicApp] Recuperacion automatica fallida",
     updated_at: isoMinutesBefore(now, 61), html_url: "https://github.com/example/issues/12" };
@@ -664,7 +664,7 @@ test("una alerta abierta no bloquea indefinidamente la recuperacion", async () =
 
 test("un reintento fallido conserva la alerta y el periodo de pausa", async () => {
   setWatchdogEnv();
-  const now = new Date();
+  const now = new Date("2026-11-03T15:00:00Z");
   const { github, calls } = recoveryGithub(now, "failure");
   const incident = { number: 12, title: "[AdjudicApp] Recuperacion automatica fallida",
     updated_at: isoMinutesBefore(now, 61), html_url: "https://github.com/example/issues/12" };
