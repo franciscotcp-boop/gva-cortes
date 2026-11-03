@@ -31,7 +31,8 @@ on:
         default: ""
   schedule:
     # Cada fuente usa un cron identificable. El selector reconoce la expresion
-    # aunque GitHub retrase el inicio y la ejecucion cruce a la hora siguiente.
+    # aunque GitHub retrase el inicio hasta el dia siguiente (maximo 24 horas).
+    # Dificil cobertura nunca se recupera despues de caducar.
     # Todos los turnos se expresan directamente en la hora de Madrid.
     # Inicio de curso: julio y agosto, lunes a sabado.
     - cron: "20 9,12,15,18,21 * 7-8 1-6"

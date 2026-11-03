@@ -85,6 +85,29 @@ function scheduledMinutes(mode, hour) {
   return [20];
 }
 
+function modeInSeason(mode, { month, day }) {
+  if (mode === "inicio") return month === 7 || month === 8;
+  if (mode === "posiciones") return month === 6 || month === 7;
+  if (mode === "acreditaciones") return month !== 8;
+  if (mode === "puestos") return (month !== 7 && month !== 8) || (month === 7 && day === 1);
+  return month !== 7 && month !== 8;
+}
+
+function sameMadridDay(a, b) {
+  return a.year === b.year && a.month === b.month && a.day === b.day;
+}
+
+function recoverableModes(modes, attemptedAt, now) {
+  const today = madridCalendar(now);
+  const attempted = madridCalendar(new Date(attemptedAt));
+  return [...new Set(modes.flatMap(mode => {
+    if (!modeInSeason(mode, today)) return [];
+    // A failed Thursday run cannot re-publish expired offers on Friday.
+    if (mode === "dificil" && !sameMadridDay(attempted, today)) return ["limpieza_puestos"];
+    return [mode];
+  }))];
+}
+
 function dueScheduledChecks(now = new Date(), graceMinutes = 30, lookbackMinutes = 1440) {
   const due = new Map();
   const today = madridCalendar(now);
@@ -94,8 +117,9 @@ function dueScheduledChecks(now = new Date(), graceMinutes = 30, lookbackMinutes
   for (let instant = first; instant <= last; instant += 60000) {
     const value = new Date(instant);
     const calendar = madridCalendar(value);
-    if (calendar.year !== today.year || calendar.month !== today.month || calendar.day !== today.day) continue;
     for (const mode of calendarModes(value)) {
+      if (!modeInSeason(mode, today)) continue;
+      if (mode === "dificil" && !sameMadridDay(calendar, today)) continue;
       if (scheduledMinutes(mode, calendar.hour).includes(calendar.minute)) {
         due.set(mode, { mode, scheduledAt: value.toISOString() });
       }
@@ -519,6 +543,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   const testAlert = envBoolean(process.env.TEST_ALERT);
   const graceMinutes = positiveNumber(process.env.SCHEDULE_GRACE_MINUTES, 30);
   const lookbackMinutes = positiveNumber(process.env.SCHEDULE_LOOKBACK_MINUTES, 1440);
+  core.info(`Inicio real: ${now.toISOString()} (${madridTimestamp(now)}); evento: ${context.eventName}; cron: ${context.payload.schedule || "no aplicable"}`);
 
   if (testAlert) {
     const issueUrl = await sendTestAlert(github, owner, repo);
@@ -558,6 +583,7 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   core.info(`Ejecuciones activas: ${activeRuns.length}; bloqueadas: ${staleRuns.length}`);
   core.info(`Fallos consecutivos: ${failedRuns.length}; umbral: ${failureThreshold}`);
   core.info(`Turnos sin comprobacion confirmada: ${missedChecks.map(check => check.mode).join(",") || "ninguno"}`);
+  for (const check of missedChecks) core.info(`Turno pendiente: ${check.mode} desde ${check.scheduledAt}`);
   core.setOutput("missing_modes", missedChecks.map(check => check.mode).join(","));
   core.info(`Limites: ejecucion ${staleMinutes} min; JSON ${dataMaxAgeMinutes} min`);
 
@@ -647,7 +673,8 @@ async function runWatchdog({ github, context, core, now = new Date(), sleepFn = 
   if (!recoveryRun) {
     const sourceRun = staleRuns[0] || failedRuns[0] || (metadataError ? context.payload.workflow_run : null);
     const originalModes = sourceRun ? await recoveryModesForRun(github, owner, repo, sourceRun, now) : [];
-    recoveryModes = [...new Set([...originalModes, ...recoveryModes])];
+    const safeOriginalModes = recoverableModes(originalModes, sourceRun ? sourceRun.created_at : now, now);
+    recoveryModes = [...new Set([...safeOriginalModes, ...recoveryModes])];
     if (!recoveryModes.length) {
       core.warning("No se ha podido identificar la fuente a recuperar; se conserva la incidencia sin anunciar una recuperacion vacia.");
       return { action: "unknown_recovery_modes" };
@@ -749,6 +776,7 @@ module.exports._test = {
   buildIncidentReport,
   calendarModes,
   dueScheduledChecks,
+  recoverableModes,
   consecutiveFailureRuns,
   envBoolean,
   generatedAtHealth,

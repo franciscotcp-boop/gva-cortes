@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -47,6 +47,29 @@ EXPLICIT_SCHEDULES = {
     DIFFICULT_LATE_SCHEDULE: "dificil",
     CLEANUP_SCHEDULE: "limpieza_puestos",
 }
+
+
+def mode_in_season(mode: str, value: datetime) -> bool:
+    current = value.astimezone(MADRID)
+    if mode == "inicio":
+        return current.month in {7, 8}
+    if mode == "posiciones":
+        return current.month in {6, 7}
+    if mode == "acreditaciones":
+        return current.month != 8
+    if mode == "puestos":
+        return current.month not in {7, 8} or (current.month == 7 and current.day == 1)
+    return current.month not in {7, 8}
+
+
+def scheduled_minutes(mode: str, hour: int) -> tuple[int, ...]:
+    if mode == "curso":
+        return (17, 47) if 9 <= hour <= 14 else (17,)
+    if mode == "puestos":
+        return (7, 37) if 13 <= hour <= 15 else (7,)
+    if mode == "dificil":
+        return (20, 50) if 13 <= hour <= 15 else (20,)
+    return (20,)
 
 
 def scheduled_modes(value: datetime) -> tuple[str, ...]:
@@ -100,10 +123,21 @@ def scheduled_event_modes(
     expression = schedule_expression.strip()
     if expression in EXPLICIT_SCHEDULES:
         mode = EXPLICIT_SCHEDULES[expression]
-        # A delayed event keeps its source, but cannot reopen a closed season.
-        for hour in range(24):
-            if mode in scheduled_modes(value.astimezone(MADRID).replace(hour=hour)):
+        if not mode_in_season(mode, value):
+            return ()
+        current = value.astimezone(MADRID)
+        # GitHub does not expose the intended instant. Recover the latest real
+        # source slot within 24 hours, including yesterday, never expired DC.
+        instant = value.astimezone(timezone.utc).replace(second=0, microsecond=0)
+        earliest = value.astimezone(timezone.utc) - timedelta(hours=24)
+        while instant >= earliest:
+            candidate = instant.astimezone(MADRID)
+            if mode == "dificil" and candidate.date() != current.date():
+                break
+            if (mode in scheduled_modes(candidate)
+                    and candidate.minute in scheduled_minutes(mode, candidate.hour)):
                 return (mode,)
+            instant -= timedelta(minutes=1)
         return ()
 
     modes = scheduled_modes(value)
@@ -183,6 +217,8 @@ def main() -> int:
         output_path = Path(os.environ["GITHUB_OUTPUT"])
     if output_path:
         write_github_output(output_path, modes)
+    print(f"Instante real (Madrid): {now.astimezone(MADRID).isoformat()}")
+    print(f"Evento programado: {args.schedule_expression or 'manual/recuperacion'}")
     print(",".join(modes) if modes else "sin_comprobacion")
     return 0
 

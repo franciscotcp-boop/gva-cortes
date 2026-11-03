@@ -2,14 +2,22 @@ name: Vigilar adjudicaciones
 run-name: Vigilar adjudicaciones (${{ github.event_name }})
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/watchdog-adjudicaciones.yml'
+      - '.github/workflows/update-adjudicaciones.yml'
+      - '.github/scripts/watchdog-adjudicaciones*'
+      - 'scripts/automation_schedule.py'
+      - 'tests/test_automation_schedule.py'
   workflow_run:
     workflows: ["Actualizar adjudicaciones"]
     types: [completed]
     branches: [main]
   schedule:
-    # Vigila cada cuarto de hora en Madrid, incluido el cambio de dia.
-    - cron: "11,26,41,56 0,9-23 * * *"
-      timezone: "Europe/Madrid"
+    # Pulso UTC sencillo, tambien de madrugada si GitHub entrega eventos tarde.
+    # El script conserva el calendario de Madrid y solo recupera fuentes pendientes.
+    - cron: "3,18,33,48 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -45,6 +53,8 @@ jobs:
     steps:
       - name: Descargar solamente el codigo del vigilante
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Comprobar vigilante
         run: node --test .github/scripts/watchdog-adjudicaciones.test.js

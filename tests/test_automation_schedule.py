@@ -232,6 +232,25 @@ class AutomationScheduleTests(unittest.TestCase):
         self.assertEqual(scheduled_event_modes(local("2026-10-09T14:20:00"), DIFFICULT_SCHEDULE), ())
         self.assertEqual(scheduled_event_modes(local("2026-07-02T10:45:00"), COURSE_SCHEDULE), ())
 
+    def test_actual_november_event_survives_midnight(self) -> None:
+        self.assertEqual(
+            scheduled_event_modes(datetime.fromisoformat("2026-11-03T01:31:32+00:00"), OFFER_LATE_SCHEDULE),
+            ("puestos",),
+        )
+        self.assertEqual(scheduled_event_modes(local("2026-11-04T04:00:00"), COURSE_SCHEDULE), ("curso",))
+        self.assertEqual(scheduled_event_modes(local("2026-11-07T04:00:00"), ACCREDITATION_SCHEDULE), ("acreditaciones",))
+
+    def test_catchup_is_bounded_and_cannot_anticipate_a_new_turn(self) -> None:
+        self.assertEqual(scheduled_event_modes(local("2026-11-03T20:08:00"), OFFER_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-11-03T08:00:00"), COURSE_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-09-01T01:00:00"), START_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-08-01T01:00:00"), POSITION_SCHEDULE), ())
+        self.assertEqual(scheduled_event_modes(local("2026-07-02T01:00:00"), OFFER_SCHEDULE), ())
+
+    def test_same_catchup_policy_in_summer_and_winter(self) -> None:
+        for moment in ("2026-09-08T00:31:00+00:00", "2026-11-03T01:31:00+00:00"):
+            self.assertEqual(scheduled_event_modes(datetime.fromisoformat(moment), OFFER_SCHEDULE), ("puestos",))
+
     def test_every_explicit_expression_is_deployed_with_a_madrid_timezone(self) -> None:
         workflow = (ROOT / ".github/workflows/update-adjudicaciones.yml").read_text(encoding="utf8")
         for expression in EXPLICIT_SCHEDULES:
@@ -245,6 +264,15 @@ class AutomationScheduleTests(unittest.TestCase):
         self.assertIn("group: actualizar-adjudicaciones", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertNotIn("git push --force", workflow)
+
+    def test_watchdog_has_a_simple_full_day_clock_and_current_checkout(self) -> None:
+        workflow = (ROOT / ".github/workflows/watchdog-adjudicaciones.yml").read_text(encoding="utf8")
+        self.assertIn('- cron: "3,18,33,48 * * * *"', workflow)
+        self.assertNotIn("timezone:", workflow)
+        self.assertIn("ref: ${{ github.event.repository.default_branch }}", workflow)
+        self.assertIn("SCHEDULE_LOOKBACK_MINUTES: \"1440\"", workflow)
+        self.assertIn("  push:\n    branches: [main]\n    paths:", workflow)
+        self.assertNotIn("contents: write", workflow)
 
     def test_backup_http_dependency_is_installed_before_validation(self) -> None:
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf8")
