@@ -230,6 +230,21 @@
           "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
         }
       ]
+    },
+    "09e20dd80e775a7bd07ee66d18491843efb1127c625d438ed563d7a113142786": {
+      "source_date": "2026-11-05",
+      "source_url": "https://ceice.gva.es/documents/162909733/416766492/261105_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "924639",
+          "candidate_name": "MARTINEZ ALTUR, MIGUEL ANGEL",
+          "center_code": "46019313",
+          "specialty_code": "219",
+          "post_specialty_code": "292",
+          "observations": "292 / FPA Cient\u00edfico/Tecnol\u00f3gico / FPA Cient\u00edfic/Tecnol\u00f2gic"
+        }
+      ]
     }
   }
 }
