@@ -245,6 +245,21 @@
           "observations": "292 / FPA Cient\u00edfico/Tecnol\u00f3gico / FPA Cient\u00edfic/Tecnol\u00f2gic"
         }
       ]
+    },
+    "7c7e9beeb23cb0ff084de84d78cf050ce80c073cda404a62de8a589d56e76794": {
+      "source_date": "2026-11-10",
+      "source_url": "https://ceice.gva.es/documents/162909733/416766492/261110_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "848014",
+          "candidate_name": "ARNAU JIMENEZ, MIREIA ESPERANZA",
+          "center_code": "46002775",
+          "specialty_code": "203",
+          "post_specialty_code": "275",
+          "observations": "275 / Cultura Cl\u00e1sica / Cultura Cl\u00e0ssica"
+        }
+      ]
     }
   }
 }

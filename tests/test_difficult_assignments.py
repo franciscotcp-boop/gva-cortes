@@ -333,6 +333,36 @@ class DifficultAssignmentsTest(unittest.TestCase):
             self.assertEqual(json.loads(updater.positions_path.read_text(encoding="utf8"))["difficult_assignments"]["awards"], [])
             self.assertEqual(json.loads(updater.state_path.read_text(encoding="utf8")), history)
 
+    def test_midyear_entrant_history_does_not_revive_old_directory_destination(self):
+        positions, ledger = self.resolved_fixture()
+        ledger["awards"][0].pop("profile_resolution")
+        ledger["awards"][0].pop("pool_identity")
+        positions["people"][0][2][0][1] = None
+        history = self.history_fixture(positions)
+        positions["people"][0][2][0][8:] = ["D", None]
+        before = copy.deepcopy(positions["people"])
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+            for _ in range(2):
+                preserve_ledger(positions, directory, history=history)
+                self.assertEqual(positions["difficult_assignments"]["awards"], [])
+        self.assertEqual(positions["people"], before)
+
+    def test_unranked_homonym_history_cannot_remove_another_person_award(self):
+        positions, ledger = self.resolved_fixture()
+        ledger["awards"][0].pop("profile_resolution")
+        ledger["awards"][0].pop("pool_identity")
+        positions["people"][0][2][0][1] = None
+        history = self.history_fixture(positions)
+        positions["people"][0][2][0][8:] = ["P", None]
+        positions["people"].append(copy.deepcopy(positions["people"][0]))
+        before = copy.deepcopy(positions["people"])
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+            preserve_ledger(positions, directory, history=history)
+            self.assertEqual(len(positions["difficult_assignments"]["awards"]), 1)
+        self.assertEqual(positions["people"], before)
+
 
 if __name__ == "__main__":
     unittest.main()

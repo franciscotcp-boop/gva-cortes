@@ -211,6 +211,10 @@ def _official_history_by_person(positions, history):
     if history.get("academic_year", "").replace("-", "/") != positions.get("academic_year", "").replace("-", "/"):
         return result
     people = positions.get("people", [])
+    pool_people = defaultdict(set)
+    for index, person in enumerate(people):
+        for entry in person[2]:
+            pool_people[(normalized_name(person[1]), str(entry[0]))].add(index)
     fields = history.get("assignment_fields", [])
     for values in history.get("assignments", []):
         row = dict(zip(fields, values))
@@ -218,10 +222,15 @@ def _official_history_by_person(positions, history):
         if not isinstance(index, int) or not 0 <= index < len(people):
             continue
         person = people[index]
-        if (normalized_name(row.get("candidate_name")) != normalized_name(person[1]) or
-                row.get("initial_order") is None or
+        identity = normalized_name(row.get("candidate_name"))
+        code = str(row.get("specialty_code"))
+        if (identity != normalized_name(person[1]) or
                 not any(str(entry[0]) == str(row.get("specialty_code")) and entry[1] == row["initial_order"]
                         for entry in person[2])):
+            continue
+        # Midyear entrants have no annual rank. Accept their history only when
+        # the name and specialty identify one person, never an ambiguous index.
+        if row.get("initial_order") is None and pool_people[(identity, code)] != {index}:
             continue
         if row.get("mode") in {"inicio", "curso"} and row.get("published_date"):
             result[id(person)].append(row)
