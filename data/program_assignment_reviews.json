@@ -260,6 +260,21 @@
           "observations": "275 / Cultura Cl\u00e1sica / Cultura Cl\u00e0ssica"
         }
       ]
+    },
+    "1c321bc456fcd5797547e5011ae4ddc96a6b1e996be52a2e00b736cae1af0e05": {
+      "source_date": "2026-11-12",
+      "source_url": "https://ceice.gva.es/documents/162909733/416766492/261112_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "767158",
+          "candidate_name": "ARTACHO ROMERO, MARIA BEGO\u00d1A",
+          "center_code": "03010715",
+          "specialty_code": "205",
+          "post_specialty_code": "293",
+          "observations": "293 / FPA Ciencias Sociales / FPA Ci\u00e8ncies Socials"
+        }
+      ]
     }
   }
 }

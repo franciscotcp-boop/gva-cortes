@@ -348,6 +348,28 @@ class DifficultAssignmentsTest(unittest.TestCase):
                 self.assertEqual(positions["difficult_assignments"]["awards"], [])
         self.assertEqual(positions["people"], before)
 
+    def test_master_history_uses_general_rank_not_specialty_rank(self):
+        for specialty_rank in (9488, None):
+            for history_rank, expected in ((12218, 0), (9488, 1)):
+                positions, ledger = self.resolved_fixture()
+                award = ledger["awards"][0]
+                award.pop("profile_resolution")
+                award.pop("pool_identity")
+                person = positions["people"][0]
+                person[3], person[4] = "maestros", [12218, 2091]
+                person[2][0][0:2] = ["127", specialty_rank]
+                award["body"], award["specialty_code"] = "maestros", "127"
+                history = self.history_fixture(positions)
+                history["assignments"][0][history["assignment_fields"].index("initial_order")] = history_rank
+                person[2][0][8:] = ["N", None]
+                before = copy.deepcopy(positions["people"])
+                with self.subTest(specialty_rank=specialty_rank, history_rank=history_rank), tempfile.TemporaryDirectory() as directory:
+                    (Path(directory) / "difficult_assignments.json").write_text(json.dumps(ledger), encoding="utf8")
+                    for _ in range(2):
+                        preserve_ledger(positions, directory, history=history)
+                        self.assertEqual(len(positions["difficult_assignments"]["awards"]), expected)
+                self.assertEqual(positions["people"], before)
+
     def test_unranked_homonym_history_cannot_remove_another_person_award(self):
         positions, ledger = self.resolved_fixture()
         ledger["awards"][0].pop("profile_resolution")

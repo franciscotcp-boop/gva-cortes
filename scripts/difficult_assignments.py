@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from urllib.parse import urlparse
 
-from position_context import MASTER_PROFILE_ALIASES, normalized_name
+from position_context import MASTER_PROFILE_ALIASES, normalized_name, profile_orders
 
 
 def parse_page(text, page_number):
@@ -225,7 +225,7 @@ def _official_history_by_person(positions, history):
         identity = normalized_name(row.get("candidate_name"))
         code = str(row.get("specialty_code"))
         if (identity != normalized_name(person[1]) or
-                not any(str(entry[0]) == str(row.get("specialty_code")) and entry[1] == row["initial_order"]
+                not any(str(entry[0]) == code and profile_orders(person, entry)[0] == row["initial_order"]
                         for entry in person[2])):
             continue
         # Midyear entrants have no annual rank. Accept their history only when
