@@ -275,6 +275,37 @@
           "observations": "293 / FPA Ciencias Sociales / FPA Ci\u00e8ncies Socials"
         }
       ]
+    },
+    "f239de09de78e88cdc84052f034919d2c266958d7b34209e430deb2d96d03c50": {
+      "source_date": "2026-11-17",
+      "source_url": "https://ceice.gva.es/documents/162909733/416766492/261117_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "767307",
+          "candidate_name": "ALBA VILA, CECILIA MARIA",
+          "center_code": "46019283",
+          "specialty_code": "205",
+          "post_specialty_code": "293",
+          "observations": "293 / FPA Ciencias Sociales / FPA Ci\u00e8ncies Socials"
+        },
+        {
+          "slot_id": "767156",
+          "candidate_name": "BOU GARCIA, BORJA",
+          "center_code": "03012888",
+          "specialty_code": "256",
+          "post_specialty_code": "297",
+          "observations": "297 / FPA Comunicaci\u00f3n (Valenciano) / FPA Comunicaci\u00f3 (Valenci\u00e0)"
+        },
+        {
+          "slot_id": "920542",
+          "candidate_name": "CARRION VIDAL, LAURA",
+          "center_code": "46019337",
+          "specialty_code": "211",
+          "post_specialty_code": "295",
+          "observations": "295 / FPA Comunicaci\u00f3n (Valenciano/Ingl\u00e9s) / FPA Comunicaci\u00f3 (Valenci\u00e0/Angl\u00e9s)"
+        }
+      ]
     }
   }
 }
