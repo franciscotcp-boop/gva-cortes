@@ -306,6 +306,21 @@
           "observations": "295 / FPA Comunicaci\u00f3n (Valenciano/Ingl\u00e9s) / FPA Comunicaci\u00f3 (Valenci\u00e0/Angl\u00e9s)"
         }
       ]
+    },
+    "30bac11d656f0c51e12e730f80a29864527d19da2485376f793afbf66cfd51fb": {
+      "source_date": "2026-11-26",
+      "source_url": "https://ceice.gva.es/documents/162909733/416766492/261126_lis_sec.pdf",
+      "reviewed_by": "project_owner",
+      "assignments": [
+        {
+          "slot_id": "878906",
+          "candidate_name": "RIBERA GISBERT, CRISTINA",
+          "center_code": "46024229",
+          "specialty_code": "207",
+          "post_specialty_code": "276",
+          "observations": "276 / \u00c1mbito Cient\u00edfico / \u00c0mbit Cient\u00edfic"
+        }
+      ]
     }
   }
 }
